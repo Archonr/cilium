@@ -1,0 +1,11 @@
+DOCKER_DEV_ACCOUNT ?= archonr
+DOCKER_REGISTRY ?= docker.io
+DOCKER_IMAGE_TAG ?= latest
+IMAGE_NAME = operator-aws
+
+docker-operator-aws-image:
+	docker buildx build \
+		--load \
+		--build-arg OPERATOR_VARIANT=operator-aws \
+		-t $(DOCKER_REGISTRY)/$(DOCKER_DEV_ACCOUNT)/$(IMAGE_NAME):$(DOCKER_IMAGE_TAG) \
+		-f images/operator/Dockerfile .
