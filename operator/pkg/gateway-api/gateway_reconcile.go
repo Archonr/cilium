@@ -203,21 +203,22 @@ func (r *gatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return controllerruntime.Success()
 }
 
-func (r *gatewayReconciler) ensureService(ctx context.Context, desired *corev1.Service) error {
-	svc := desired.DeepCopy()
-	_, err := controllerutil.CreateOrPatch(ctx, r.Client, svc, func() error {
-		// Save and restore loadBalancerClass
-		// e.g. if a mutating webhook writes this field
-		lbClass := svc.Spec.LoadBalancerClass
-		svc.Spec = desired.Spec
-		svc.OwnerReferences = desired.OwnerReferences
-		setMergedLabelsAndAnnotations(svc, desired)
-
-		// Ignore the loadBalancerClass if it was set by a mutating webhook
-		svc.Spec.LoadBalancerClass = lbClass
+func (r *gatewayReconciler) filterGRPCRoutesByListener(ctx context.Context, gw *gatewayv1.Gateway, listener *gatewayv1.Listener) []gatewayv1.GRPCRoute {
+	var grpcRouteList gatewayv1.GRPCRouteList
+	if err := r.Client.List(ctx, &grpcRouteList); err != nil {
 		return nil
-	})
-	return err
+	}
+
+	var filtered []gatewayv1.GRPCRoute
+	for _, route := range grpcRouteList.Items {
+		if isAttachable(ctx, gw, &route, route.Status.Parents) &&
+			isAllowed(ctx, r.Client, gw, &route, r.logger) &&
+			len(computeHostsForListener(listener, route.Spec.Hostnames, nil)) > 0 &&
+			parentRefMatched(gw, listener, route.GetNamespace(), route.Spec.ParentRefs) {
+			filtered = append(filtered, route)
+		}
+	}
+	return filtered
 }
 
 func (r *gatewayReconciler) ensureEndpoints(ctx context.Context, desired *corev1.Endpoints) error {
