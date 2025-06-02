@@ -5,6 +5,7 @@ package builder
 
 import (
 	_ "embed"
+	"fmt"
 
 	"github.com/cilium/cilium/cilium-cli/connectivity/builder/manifests/template"
 	"github.com/cilium/cilium/cilium-cli/connectivity/check"
@@ -32,6 +33,9 @@ var (
 
 	//go:embed manifests/client-egress-to-fqdns.yaml
 	clientEgressToFQDNsPolicyYAML string
+
+	//go:embed manifests/client-egress-to-fqdns-and-http-get.yaml
+	clientEgressToFQDNsAndHTTPGetPolicyYAML string
 
 	//go:embed manifests/echo-ingress-from-other-client.yaml
 	echoIngressFromOtherClientPolicyYAML string
@@ -125,6 +129,13 @@ func GetTestSuites(params check.Parameters) ([]func(connTests []*check.Connectiv
 				},
 			}, nil
 		}
+		if params.PerfParameters.Bandwidth {
+			return []func(connTests []*check.ConnectivityTest, extraTests func(cts ...*check.ConnectivityTest) error) error{
+				func(connTests []*check.ConnectivityTest, _ func(cts ...*check.ConnectivityTest) error) error {
+					return netBandwidthLimitTests(connTests[0])
+				},
+			}, nil
+		}
 		return []func(connTests []*check.ConnectivityTest, extraTests func(cts ...*check.ConnectivityTest) error) error{
 			func(connTests []*check.ConnectivityTest, _ func(cts ...*check.ConnectivityTest) error) error {
 				return networkPerformanceTests(connTests[0])
@@ -194,6 +205,12 @@ func networkQosTests(ct *check.ConnectivityTest) error {
 	return injectTests(tests, ct)
 }
 
+// netBandwidthLimitTests injects the network performance connectivity tests.
+func netBandwidthLimitTests(ct *check.ConnectivityTest) error {
+	tests := []testBuilder{networkBandwidthLimit{}}
+	return injectTests(tests, ct)
+}
+
 // connDisruptTests injects the conn-disrupt connectivity tests.
 func connDisruptTests(ct *check.ConnectivityTest) error {
 	tests := []testBuilder{
@@ -207,7 +224,6 @@ func connDisruptTests(ct *check.ConnectivityTest) error {
 // Each test should be run in a separate namespace.
 func concurrentTests(connTests []*check.ConnectivityTest) error {
 	tests := []testBuilder{
-		noUnexpectedPacketDrops{},
 		noPolicies{},
 		noPoliciesFromOutside{},
 		noPoliciesExtra{},
@@ -257,6 +273,7 @@ func concurrentTests(connTests []*check.ConnectivityTest) error {
 		podToPodEncryptionV2{},
 		nodeToNodeEncryption{},
 		egressGateway{},
+		egressGatewayMultigateway{},
 		egressGatewayExcludedCidrs{},
 		egressGatewayWithL7Policy{},
 		podToNodeCidrpolicy{},
@@ -274,6 +291,7 @@ func concurrentTests(connTests []*check.ConnectivityTest) error {
 		outsideToIngressService{},
 		dnsOnly{},
 		toFqdns{},
+		toFqdnsWithProxy{},
 		podToControlplaneHost{},
 		podToK8sOnControlplane{},
 		podToControlplaneHostCidr{},
@@ -301,7 +319,10 @@ func sequentialTests(ct *check.ConnectivityTest) error {
 
 // finalTests injects the all connectivity tests that must be run as the last tests sequentially.
 func finalTests(ct *check.ConnectivityTest) error {
-	return injectTests([]testBuilder{checkLogErrors{}}, ct)
+	return injectTests([]testBuilder{
+		noUnexpectedPacketDrops{},
+		checkLogErrors{},
+	}, ct)
 }
 
 func renderTemplates(clusterName string, param check.Parameters) (map[string]string, error) {
@@ -316,6 +337,7 @@ func renderTemplates(clusterName string, param check.Parameters) (map[string]str
 		"clientEgressL7HTTPPolicyPortRangeYAML":              clientEgressL7HTTPPolicyPortRangeYAML,
 		"clientEgressL7HTTPNamedPortPolicyYAML":              clientEgressL7HTTPNamedPortPolicyYAML,
 		"clientEgressToFQDNsPolicyYAML":                      clientEgressToFQDNsPolicyYAML,
+		"clientEgressToFQDNsAndHTTPGetPolicyYAML":            clientEgressToFQDNsAndHTTPGetPolicyYAML,
 		"clientEgressTLSSNIPolicyYAML":                       clientEgressTLSSNIPolicyYAML,
 		"clientEgressTLSSNIWildcardPolicyYAML":               clientEgressTLSSNIWildcardPolicyYAML,
 		"clientEgressTLSSNIDoubleWildcardPolicyYAML":         clientEgressTLSSNIDoubleWildcardPolicyYAML,
@@ -347,7 +369,7 @@ func renderTemplates(clusterName string, param check.Parameters) (map[string]str
 			ClusterName: clusterName,
 		})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to render template %s: %w", key, err)
 		}
 		renderedTemplates[key] = val
 	}

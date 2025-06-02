@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
 /* Copyright Authors of Cilium */
 
-#include "common.h"
 #include <bpf/ctx/skb.h>
+#include "common.h"
 #include "pktgen.h"
 
 #define NODE_ID 2333
@@ -41,7 +41,6 @@ int mock_ctx_redirect(const struct __sk_buff *ctx __maybe_unused, int ifindex, _
 
 #include "bpf_host.c"
 
-ASSIGN_CONFIG(__u32, host_secctx_from_ipcache, 1)
 ASSIGN_CONFIG(__u32, security_label, TUNNEL_ID)
 
 #include "lib/ipcache.h"

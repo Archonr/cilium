@@ -8,6 +8,7 @@ import (
 	"encoding"
 	"errors"
 	"iter"
+	"log/slog"
 	"testing"
 
 	"github.com/cilium/ebpf"
@@ -16,7 +17,6 @@ import (
 	"github.com/cilium/statedb"
 	"github.com/cilium/statedb/index"
 	"github.com/cilium/statedb/reconciler"
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -62,17 +62,17 @@ func Test_MapOps(t *testing.T) {
 	obj := &TestObject{Key: TestKey{1}, Value: TestValue{2}}
 
 	// Test Update() and Delete()
-	err = ops.Update(ctx, nil, obj)
+	err = ops.Update(ctx, nil, 0, obj)
 	assert.NoError(t, err, "Update")
 
-	err = ops.Update(ctx, nil, obj)
+	err = ops.Update(ctx, nil, 0, obj)
 	assert.NoError(t, err, "Update")
 
 	v, err := testMap.Lookup(&TestKey{1})
 	assert.NoError(t, err, "Lookup")
 	assert.Equal(t, v.(*TestValue).Value, obj.Value.Value)
 
-	err = ops.Delete(ctx, nil, obj)
+	err = ops.Delete(ctx, nil, 0, obj)
 	assert.NoError(t, err, "Delete")
 
 	_, err = testMap.Lookup(&TestKey{1})
@@ -169,10 +169,10 @@ func Test_MapOps_ReconcilerExample(t *testing.T) {
 	ops := NewMapOps[*TestObject](exampleMap)
 
 	// Silence the hive log output.
-	oldLogLevel := logging.DefaultLogger.GetLevel()
-	logging.SetLogLevel(logrus.ErrorLevel)
+	oldLogLevel := logging.GetSlogLevel(logging.DefaultSlogLogger)
+	logging.SetSlogLevel(slog.LevelError)
 	t.Cleanup(func() {
-		logging.SetLogLevel(oldLogLevel)
+		logging.SetSlogLevel(oldLogLevel)
 	})
 
 	// Setup and start a hive to run the reconciler.

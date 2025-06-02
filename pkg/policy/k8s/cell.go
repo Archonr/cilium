@@ -11,10 +11,10 @@ import (
 	"github.com/cilium/hive/cell"
 	"k8s.io/apimachinery/pkg/util/sets"
 
+	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	"github.com/cilium/cilium/pkg/ipcache"
 	"github.com/cilium/cilium/pkg/k8s"
 	cilium_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
-	cilium_v2_alpha1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
 	"github.com/cilium/cilium/pkg/k8s/client"
 	"github.com/cilium/cilium/pkg/k8s/resource"
 	slim_networking_v1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/networking/v1"
@@ -31,7 +31,7 @@ const (
 	k8sAPIGroupNetworkingV1Core                 = "networking.k8s.io/v1::NetworkPolicy"
 	k8sAPIGroupCiliumNetworkPolicyV2            = "cilium/v2::CiliumNetworkPolicy"
 	k8sAPIGroupCiliumClusterwideNetworkPolicyV2 = "cilium/v2::CiliumClusterwideNetworkPolicy"
-	k8sAPIGroupCiliumCIDRGroupV2Alpha1          = "cilium/v2alpha1::CiliumCIDRGroup"
+	k8sAPIGroupCiliumCIDRGroupV2                = "cilium/v2::CiliumCIDRGroup"
 )
 
 // Cell starts the K8s policy watcher. The K8s policy watcher watches all
@@ -66,9 +66,10 @@ type PolicyWatcherParams struct {
 
 	Lifecycle cell.Lifecycle
 
-	ClientSet client.Clientset
-	Config    *option.DaemonConfig
-	Logger    *slog.Logger
+	ClientSet               client.Clientset
+	Config                  *option.DaemonConfig
+	ClusterMeshPolicyConfig cmtypes.PolicyConfig
+	Logger                  *slog.Logger
 
 	K8sResourceSynced *synced.Resources
 	K8sAPIGroups      *synced.APIGroups
@@ -79,7 +80,7 @@ type PolicyWatcherParams struct {
 
 	CiliumNetworkPolicies            resource.Resource[*cilium_v2.CiliumNetworkPolicy]
 	CiliumClusterwideNetworkPolicies resource.Resource[*cilium_v2.CiliumClusterwideNetworkPolicy]
-	CiliumCIDRGroups                 resource.Resource[*cilium_v2_alpha1.CiliumCIDRGroup]
+	CiliumCIDRGroups                 resource.Resource[*cilium_v2.CiliumCIDRGroup]
 	NetworkPolicies                  resource.Resource[*slim_networking_v1.NetworkPolicy]
 
 	MetricsManager CNPMetrics
@@ -97,6 +98,7 @@ func startK8sPolicyWatcher(params PolicyWatcherParams) {
 	p := &policyWatcher{
 		log:                              params.Logger,
 		config:                           params.Config,
+		clusterMeshPolicyConfig:          params.ClusterMeshPolicyConfig,
 		policyImporter:                   params.PolicyImporter,
 		k8sResourceSynced:                params.K8sResourceSynced,
 		k8sAPIGroups:                     params.K8sAPIGroups,
@@ -108,7 +110,7 @@ func startK8sPolicyWatcher(params PolicyWatcherParams) {
 		networkPolicies:                  params.NetworkPolicies,
 
 		cnpCache:       make(map[resource.Key]*types.SlimCNP),
-		cidrGroupCache: make(map[string]*cilium_v2_alpha1.CiliumCIDRGroup),
+		cidrGroupCache: make(map[string]*cilium_v2.CiliumCIDRGroup),
 		cidrGroupCIDRs: make(map[string]sets.Set[netip.Prefix]),
 
 		toServicesPolicies: make(map[resource.Key]struct{}),
@@ -155,7 +157,7 @@ func startK8sPolicyWatcher(params PolicyWatcherParams) {
 	}
 
 	if params.Config.EnableCiliumNetworkPolicy || params.Config.EnableCiliumClusterwideNetworkPolicy {
-		p.registerResourceWithSyncFn(ctx, k8sAPIGroupCiliumCIDRGroupV2Alpha1, func() bool {
+		p.registerResourceWithSyncFn(ctx, k8sAPIGroupCiliumCIDRGroupV2, func() bool {
 			return p.cidrGroupSynced.Load()
 		})
 	}

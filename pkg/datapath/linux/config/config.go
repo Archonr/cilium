@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -34,8 +33,8 @@ import (
 	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/labels"
+	"github.com/cilium/cilium/pkg/loadbalancer"
 	"github.com/cilium/cilium/pkg/mac"
-	"github.com/cilium/cilium/pkg/maglev"
 	"github.com/cilium/cilium/pkg/maps/configmap"
 	"github.com/cilium/cilium/pkg/maps/ctmap"
 	ipcachemap "github.com/cilium/cilium/pkg/maps/ipcache"
@@ -47,7 +46,6 @@ import (
 	"github.com/cilium/cilium/pkg/maps/nodemap"
 	"github.com/cilium/cilium/pkg/maps/policymap"
 	"github.com/cilium/cilium/pkg/maps/recorder"
-	"github.com/cilium/cilium/pkg/maps/tunnel"
 	"github.com/cilium/cilium/pkg/maps/vtep"
 	"github.com/cilium/cilium/pkg/netns"
 	"github.com/cilium/cilium/pkg/option"
@@ -62,7 +60,6 @@ type HeaderfileWriter struct {
 	log                *slog.Logger
 	nodeMap            nodemap.MapV2
 	nodeAddressing     datapath.NodeAddressing
-	maglev             *maglev.Maglev
 	nodeExtraDefines   dpdef.Map
 	nodeExtraDefineFns []dpdef.Fn
 	sysctl             sysctl.Sysctl
@@ -82,7 +79,6 @@ func NewHeaderfileWriter(p WriterParams) (datapath.ConfigWriter, error) {
 		nodeExtraDefineFns: p.NodeExtraDefineFns,
 		log:                p.Log,
 		sysctl:             p.Sysctl,
-		maglev:             p.Maglev,
 	}, nil
 }
 
@@ -139,12 +135,6 @@ func (h *HeaderfileWriter) WriteNodeConfig(w io.Writer, cfg *datapath.LocalNodeC
 
 	cDefinesMap["KERNEL_HZ"] = fmt.Sprintf("%d", option.Config.KernelHz)
 
-	if option.Config.BPFDistributedLRU {
-		cDefinesMap["LRU_MEM_FLAVOR"] = "BPF_F_NO_COMMON_LRU"
-	} else {
-		cDefinesMap["LRU_MEM_FLAVOR"] = "0"
-	}
-
 	if option.Config.EnableIPv6 && option.Config.EnableIPv6FragmentsTracking {
 		cDefinesMap["ENABLE_IPV6_FRAGMENTS"] = "1"
 		cDefinesMap["CILIUM_IPV6_FRAG_MAP_MAX_ENTRIES"] = fmt.Sprintf("%d", option.Config.FragmentsMapEntries)
@@ -152,10 +142,8 @@ func (h *HeaderfileWriter) WriteNodeConfig(w io.Writer, cfg *datapath.LocalNodeC
 
 	if option.Config.EnableIPv4 {
 		ipv4GW := cfg.CiliumInternalIPv4
-		loopbackIPv4 := cfg.LoopbackIPv4
 		ipv4Range := cfg.AllocCIDRIPv4
 		cDefinesMap["IPV4_GATEWAY"] = fmt.Sprintf("%#x", byteorder.NetIPv4ToHost32(ipv4GW))
-		cDefinesMap["IPV4_LOOPBACK"] = fmt.Sprintf("%#x", byteorder.NetIPv4ToHost32(loopbackIPv4))
 		cDefinesMap["IPV4_MASK"] = fmt.Sprintf("%#x", byteorder.NetIPv4ToHost32(net.IP(ipv4Range.Mask)))
 
 		if option.Config.EnableIPv4FragmentsTracking {
@@ -192,7 +180,6 @@ func (h *HeaderfileWriter) WriteNodeConfig(w io.Writer, cfg *datapath.LocalNodeC
 	cDefinesMap["CILIUM_LB_MAGLEV_MAP_MAX_ENTRIES"] = fmt.Sprintf("%d", lbmap.MaglevMapMaxEntries)
 	cDefinesMap["CILIUM_LB_SKIP_MAP_MAX_ENTRIES"] = fmt.Sprintf("%d", lbmap.SkipLBMapMaxEntries)
 
-	cDefinesMap["TUNNEL_ENDPOINT_MAP_SIZE"] = fmt.Sprintf("%d", tunnel.MaxEntries)
 	cDefinesMap["ENDPOINTS_MAP_SIZE"] = fmt.Sprintf("%d", lxcmap.MaxEntries)
 	cDefinesMap["METRICS_MAP_SIZE"] = fmt.Sprintf("%d", metricsmap.MaxEntries)
 	cDefinesMap["AUTH_MAP_SIZE"] = fmt.Sprintf("%d", option.Config.AuthMapEntries)
@@ -200,7 +187,7 @@ func (h *HeaderfileWriter) WriteNodeConfig(w io.Writer, cfg *datapath.LocalNodeC
 	cDefinesMap["IPCACHE_MAP_SIZE"] = fmt.Sprintf("%d", ipcachemap.MaxEntries)
 	cDefinesMap["NODE_MAP_SIZE"] = fmt.Sprintf("%d", h.nodeMap.Size())
 	cDefinesMap["POLICY_PROG_MAP_SIZE"] = fmt.Sprintf("%d", policymap.PolicyCallMaxEntries)
-	cDefinesMap["L2_RESPONSER_MAP4_SIZE"] = fmt.Sprintf("%d", l2respondermap.DefaultMaxEntries)
+	cDefinesMap["L2_RESPONDER_MAP4_SIZE"] = fmt.Sprintf("%d", l2respondermap.DefaultMaxEntries)
 
 	cDefinesMap["CT_CONNECTION_LIFETIME_TCP"] = fmt.Sprintf("%d", int64(option.Config.CTMapEntriesTimeoutTCP.Seconds()))
 	cDefinesMap["CT_CONNECTION_LIFETIME_NONTCP"] = fmt.Sprintf("%d", int64(option.Config.CTMapEntriesTimeoutAny.Seconds()))
@@ -214,6 +201,9 @@ func (h *HeaderfileWriter) WriteNodeConfig(w io.Writer, cfg *datapath.LocalNodeC
 
 	if option.Config.PreAllocateMaps {
 		cDefinesMap["PREALLOCATE_MAPS"] = "1"
+	}
+	if option.Config.BPFDistributedLRU {
+		cDefinesMap["NO_COMMON_MEM_MAPS"] = "1"
 	}
 
 	cDefinesMap["EVENTS_MAP_RATE_LIMIT"] = fmt.Sprintf("%d", option.Config.BPFEventsDefaultRateLimit)
@@ -406,22 +396,22 @@ func (h *HeaderfileWriter) WriteNodeConfig(w io.Writer, cfg *datapath.LocalNodeC
 		cDefinesMap["DSR_ENCAP_IPIP"] = fmt.Sprintf("%d", dsrEncapIPIP)
 		cDefinesMap["DSR_ENCAP_GENEVE"] = fmt.Sprintf("%d", dsrEncapGeneve)
 		cDefinesMap["DSR_ENCAP_NONE"] = fmt.Sprintf("%d", dsrEncapNone)
-		if option.Config.LoadBalancerUsesDSR() {
+		if cfg.LBConfig.LoadBalancerUsesDSR() {
 			cDefinesMap["ENABLE_DSR"] = "1"
 			if option.Config.EnablePMTUDiscovery {
 				cDefinesMap["ENABLE_DSR_ICMP_ERRORS"] = "1"
 			}
-			if option.Config.NodePortMode == option.NodePortModeHybrid {
+			if cfg.LBConfig.LBMode == loadbalancer.LBModeHybrid {
 				cDefinesMap["ENABLE_DSR_HYBRID"] = "1"
-			} else if option.Config.LoadBalancerModeAnnotation {
+			} else if cfg.LBConfig.LBModeAnnotation {
 				cDefinesMap["ENABLE_DSR_HYBRID"] = "1"
 				cDefinesMap["ENABLE_DSR_BYUSER"] = "1"
 			}
-			if option.Config.LoadBalancerDSRDispatch == option.DSRDispatchOption {
+			if cfg.LBConfig.DSRDispatch == loadbalancer.DSRDispatchOption {
 				cDefinesMap["DSR_ENCAP_MODE"] = fmt.Sprintf("%d", dsrEncapNone)
-			} else if option.Config.LoadBalancerDSRDispatch == option.DSRDispatchIPIP {
+			} else if cfg.LBConfig.DSRDispatch == loadbalancer.DSRDispatchIPIP {
 				cDefinesMap["DSR_ENCAP_MODE"] = fmt.Sprintf("%d", dsrEncapIPIP)
-			} else if option.Config.LoadBalancerDSRDispatch == option.DSRDispatchGeneve {
+			} else if cfg.LBConfig.DSRDispatch == loadbalancer.DSRDispatchGeneve {
 				cDefinesMap["DSR_ENCAP_MODE"] = fmt.Sprintf("%d", dsrEncapGeneve)
 			}
 		} else {
@@ -469,9 +459,9 @@ func (h *HeaderfileWriter) WriteNodeConfig(w io.Writer, cfg *datapath.LocalNodeC
 			}
 		}
 
-		cDefinesMap["NODEPORT_PORT_MIN"] = fmt.Sprintf("%d", option.Config.NodePortMin)
-		cDefinesMap["NODEPORT_PORT_MAX"] = fmt.Sprintf("%d", option.Config.NodePortMax)
-		cDefinesMap["NODEPORT_PORT_MIN_NAT"] = fmt.Sprintf("%d", option.Config.NodePortMax+1)
+		cDefinesMap["NODEPORT_PORT_MIN"] = fmt.Sprintf("%d", cfg.LBConfig.NodePortMin)
+		cDefinesMap["NODEPORT_PORT_MAX"] = fmt.Sprintf("%d", cfg.LBConfig.NodePortMax)
+		cDefinesMap["NODEPORT_PORT_MIN_NAT"] = fmt.Sprintf("%d", cfg.LBConfig.NodePortMax+1)
 		cDefinesMap["NODEPORT_PORT_MAX_NAT"] = strconv.Itoa(NodePortMaxNAT)
 	}
 
@@ -490,23 +480,23 @@ func (h *HeaderfileWriter) WriteNodeConfig(w io.Writer, cfg *datapath.LocalNodeC
 	)
 	cDefinesMap["LB_SELECTION_RANDOM"] = fmt.Sprintf("%d", selectionRandom)
 	cDefinesMap["LB_SELECTION_MAGLEV"] = fmt.Sprintf("%d", selectionMaglev)
-	if option.Config.LoadBalancerAlgorithmAnnotation {
+	if cfg.LBConfig.AlgorithmAnnotation {
 		cDefinesMap["LB_SELECTION_PER_SERVICE"] = "1"
 	}
-	if option.Config.NodePortAlg == option.NodePortAlgRandom {
+	if cfg.LBConfig.LBAlgorithm == loadbalancer.LBAlgorithmRandom {
 		cDefinesMap["LB_SELECTION"] = fmt.Sprintf("%d", selectionRandom)
-	} else if option.Config.NodePortAlg == option.NodePortAlgMaglev {
+	} else if cfg.LBConfig.LBAlgorithm == loadbalancer.LBAlgorithmMaglev {
 		cDefinesMap["LB_SELECTION"] = fmt.Sprintf("%d", selectionMaglev)
 	}
 
 	// define maglev tables when loadbalancer algorith is maglev or config can
 	// be set by the Service annotation
-	if option.Config.LoadBalancerAlgorithmAnnotation ||
-		option.Config.NodePortAlg == option.NodePortAlgMaglev {
-		cDefinesMap["LB_MAGLEV_LUT_SIZE"] = fmt.Sprintf("%d", h.maglev.Config.MaglevTableSize)
+	if cfg.LBConfig.AlgorithmAnnotation ||
+		cfg.LBConfig.LBAlgorithm == loadbalancer.LBAlgorithmMaglev {
+		cDefinesMap["LB_MAGLEV_LUT_SIZE"] = fmt.Sprintf("%d", cfg.MaglevConfig.TableSize)
 	}
-	cDefinesMap["HASH_INIT4_SEED"] = fmt.Sprintf("%d", h.maglev.SeedJhash0)
-	cDefinesMap["HASH_INIT6_SEED"] = fmt.Sprintf("%d", h.maglev.SeedJhash1)
+	cDefinesMap["HASH_INIT4_SEED"] = fmt.Sprintf("%d", cfg.MaglevConfig.SeedJhash0)
+	cDefinesMap["HASH_INIT6_SEED"] = fmt.Sprintf("%d", cfg.MaglevConfig.SeedJhash1)
 
 	if option.Config.DirectRoutingDeviceRequired() {
 		drd := cfg.DirectRoutingDevice
@@ -537,7 +527,7 @@ func (h *HeaderfileWriter) WriteNodeConfig(w io.Writer, cfg *datapath.LocalNodeC
 				return fmt.Errorf("IPv6 direct routing device IP not found")
 			}
 			extraMacrosMap["IPV6_DIRECT_ROUTING"] = ip.String()
-			fw.WriteString(FmtDefineAddress("IPV6_DIRECT_ROUTING", ip))
+			fw.WriteString(FmtDefineAddress("IPV6_DIRECT_ROUTING", ip.AsSlice()))
 			cDefinesMap["DIRECT_ROUTING_DEV_IFINDEX"] = fmt.Sprintf("%d", drd.Index)
 		}
 	} else {
@@ -556,16 +546,6 @@ func (h *HeaderfileWriter) WriteNodeConfig(w io.Writer, cfg *datapath.LocalNodeC
 
 	if option.Config.EnableHostFirewall {
 		cDefinesMap["ENABLE_HOST_FIREWALL"] = "1"
-	}
-
-	if option.Config.EnableIPSec {
-		nodeAddress := cfg.NodeIPv4
-		if nodeAddress == nil {
-			return errors.New("external IPv4 node address is required when IPSec is enabled, but none found")
-		}
-
-		a := byteorder.NetIPv4ToHost32(nodeAddress)
-		cDefinesMap["IPV4_ENCRYPT_IFACE"] = fmt.Sprintf("%d", a)
 	}
 
 	if option.Config.EnableNodePort {
@@ -917,11 +897,6 @@ func (h *HeaderfileWriter) WriteEndpointConfig(w io.Writer, cfg *datapath.LocalN
 
 	deviceNames := cfg.DeviceNames()
 
-	// Add cilium_wg0 if necessary.
-	if option.Config.NeedBPFHostOnWireGuardDevice() {
-		deviceNames = append(slices.Clone(deviceNames), wgtypes.IfaceName)
-	}
-
 	writeIncludes(w)
 
 	return h.writeTemplateConfig(fw, deviceNames, cfg.HostEndpointID, e, cfg.DirectRoutingDevice)
@@ -950,9 +925,6 @@ func (h *HeaderfileWriter) writeTemplateConfig(fw *bufio.Writer, devices []strin
 	if e.IsHost() {
 		// Only used to differentiate between host endpoint template and other templates.
 		fmt.Fprintf(fw, "#define HOST_ENDPOINT 1\n")
-		if option.Config.EnableNodePort {
-			fmt.Fprintf(fw, "#define DISABLE_LOOPBACK_LB 1\n")
-		}
 	}
 
 	fmt.Fprintf(fw, "#define HOST_EP_ID %d\n", uint32(hostEndpointID))
@@ -979,11 +951,11 @@ func (h *HeaderfileWriter) WriteTemplateConfig(w io.Writer, cfg *datapath.LocalN
 	return h.writeTemplateConfig(fw, cfg.DeviceNames(), cfg.HostEndpointID, e, cfg.DirectRoutingDevice)
 }
 
-func preferredIPv6Address(deviceAddresses []tables.DeviceAddress) net.IP {
-	var ip net.IP
+func preferredIPv6Address(deviceAddresses []tables.DeviceAddress) netip.Addr {
+	var ip netip.Addr
 	for _, addr := range deviceAddresses {
 		if addr.Addr.Is6() {
-			ip = addr.AsIP()
+			ip = addr.Addr
 			if !ip.IsLinkLocalUnicast() {
 				break
 			}

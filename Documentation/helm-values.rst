@@ -143,7 +143,7 @@
    * - :spelling:ignore:`authentication.mutual.spire.install.initImage`
      - init container image of SPIRE agent and server
      - object
-     - ``{"digest":"sha256:37f7b378a29ceb4c551b1b5582e27747b855bbfaa73fa11914fe0df028dc581f","override":null,"pullPolicy":"Always","repository":"docker.io/library/busybox","tag":"1.37.0","useDigest":true}``
+     - ``{"digest":"sha256:f64ff79725d0070955b368a4ef8dc729bd8f3d8667823904adcb299fe58fc3da","override":null,"pullPolicy":"Always","repository":"docker.io/library/busybox","tag":"1.37.0","useDigest":true}``
    * - :spelling:ignore:`authentication.mutual.spire.install.namespace`
      - SPIRE namespace to install into
      - string
@@ -259,9 +259,13 @@
    * - :spelling:ignore:`bandwidthManager`
      - Enable bandwidth manager to optimize TCP and UDP workloads and allow for rate-limiting traffic from individual Pods with EDT (Earliest Departure Time) through the "kubernetes.io/egress-bandwidth" Pod annotation.
      - object
-     - ``{"bbr":false,"enabled":false}``
+     - ``{"bbr":false,"bbrHostNamespaceOnly":false,"enabled":false}``
    * - :spelling:ignore:`bandwidthManager.bbr`
      - Activate BBR TCP congestion control for Pods
+     - bool
+     - ``false``
+   * - :spelling:ignore:`bandwidthManager.bbrHostNamespaceOnly`
+     - Activate BBR TCP congestion control for Pods in the host namespace only.
      - bool
      - ``false``
    * - :spelling:ignore:`bandwidthManager.enabled`
@@ -271,7 +275,7 @@
    * - :spelling:ignore:`bgpControlPlane`
      - This feature set enables virtual BGP routers to be created via CiliumBGPPeeringPolicy CRDs.
      - object
-     - ``{"enabled":false,"routerIDAllocation":{"mode":"default"},"secretsNamespace":{"create":false,"name":"kube-system"},"statusReport":{"enabled":true}}``
+     - ``{"enabled":false,"routerIDAllocation":{"ipPool":"","mode":"default"},"secretsNamespace":{"create":false,"name":"kube-system"},"statusReport":{"enabled":true}}``
    * - :spelling:ignore:`bgpControlPlane.enabled`
      - Enables the BGP control plane.
      - bool
@@ -279,7 +283,11 @@
    * - :spelling:ignore:`bgpControlPlane.routerIDAllocation`
      - BGP router-id allocation mode
      - object
-     - ``{"mode":"default"}``
+     - ``{"ipPool":"","mode":"default"}``
+   * - :spelling:ignore:`bgpControlPlane.routerIDAllocation.ipPool`
+     - IP pool to allocate the BGP router-id from when the mode is ip-pool.
+     - string
+     - ``""``
    * - :spelling:ignore:`bgpControlPlane.routerIDAllocation.mode`
      - BGP router-id allocation mode. In default mode, the router-id is derived from the IPv4 address if it is available, or else it is determined by the lower 32 bits of the MAC address.
      - string
@@ -459,7 +467,7 @@
    * - :spelling:ignore:`certgen`
      - Configure certificate generation for Hubble integration. If hubble.tls.auto.method=cronJob, these values are used for the Kubernetes CronJob which will be scheduled regularly to (re)generate any certificates not provided manually.
      - object
-     - ``{"affinity":{},"annotations":{"cronJob":{},"job":{}},"extraVolumeMounts":[],"extraVolumes":[],"generateCA":true,"image":{"digest":"sha256:cb3b1480f404489cbf0dbb9ac4576f44392532800180a4d6260ab430b4cbaedc","override":null,"pullPolicy":"Always","repository":"quay.io/cilium/certgen","tag":"v0.2.3","useDigest":true},"nodeSelector":{},"podLabels":{},"priorityClassName":"","tolerations":[],"ttlSecondsAfterFinished":1800}``
+     - ``{"affinity":{},"annotations":{"cronJob":{},"job":{}},"extraVolumeMounts":[],"extraVolumes":[],"generateCA":true,"image":{"digest":"sha256:de7b97b1d19a34b674d0c4bc1da4db999f04ae355923a9a994ac3a81e1a1b5ff","override":null,"pullPolicy":"Always","repository":"quay.io/cilium/certgen","tag":"v0.2.4","useDigest":true},"nodeSelector":{},"podLabels":{},"priorityClassName":"","resources":{},"tolerations":[],"ttlSecondsAfterFinished":1800}``
    * - :spelling:ignore:`certgen.affinity`
      - Affinity for certgen
      - object
@@ -492,6 +500,10 @@
      - Priority class for certgen ref: https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/#priorityclass
      - string
      - ``""``
+   * - :spelling:ignore:`certgen.resources`
+     - Resource limits for certgen ref: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers
+     - object
+     - ``{}``
    * - :spelling:ignore:`certgen.tolerations`
      - Node tolerations for pod assignment on nodes with taints ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
      - list
@@ -756,6 +768,10 @@
      - Minimum number/percentage of pods that should remain scheduled. When it's set, maxUnavailable must be disabled by ``maxUnavailable: null``
      - string
      - ``nil``
+   * - :spelling:ignore:`clustermesh.apiserver.podDisruptionBudget.unhealthyPodEvictionPolicy`
+     - How are unhealthy, but running, pods counted for eviction
+     - string
+     - ``nil``
    * - :spelling:ignore:`clustermesh.apiserver.podLabels`
      - Labels to be added to clustermesh-apiserver pods
      - object
@@ -800,6 +816,10 @@
      - The internalTrafficPolicy of service used for apiserver access.
      - string
      - ``"Cluster"``
+   * - :spelling:ignore:`clustermesh.apiserver.service.labels`
+     - Labels for the clustermesh-apiserver service.
+     - object
+     - ``{}``
    * - :spelling:ignore:`clustermesh.apiserver.service.loadBalancerClass`
      - Configure a loadBalancerClass. Allows to configure the loadBalancerClass on the clustermesh-apiserver LB service in case the Service type is set to LoadBalancer (requires Kubernetes 1.24+).
      - string
@@ -912,6 +932,10 @@
      - The maximum number of clusters to support in a ClusterMesh. This value cannot be changed on running clusters, and all clusters in a ClusterMesh must be configured with the same value. Values > 255 will decrease the maximum allocatable cluster-local identities. Supported values are 255 and 511.
      - int
      - ``255``
+   * - :spelling:ignore:`clustermesh.policyDefaultLocalCluster`
+     - Control whether policy rules assume by default the local cluster if not explicitly selected
+     - bool
+     - ``false``
    * - :spelling:ignore:`clustermesh.useAPIServer`
      - Deploy clustermesh-apiserver for clustermesh
      - bool
@@ -1119,7 +1143,7 @@
    * - :spelling:ignore:`enableIPv4Masquerade`
      - Enables masquerading of IPv4 traffic leaving the node from endpoints.
      - bool
-     - ``true``
+     - ``true`` unless ipam eni mode is active
    * - :spelling:ignore:`enableIPv6BIGTCP`
      - Enables IPv6 BIG TCP support which increases maximum IPv6 GSO/GRO limits for nodes and pods
      - bool
@@ -1142,10 +1166,6 @@
      - ``false``
    * - :spelling:ignore:`enableNonDefaultDenyPolicies`
      - Enable Non-Default-Deny policies
-     - bool
-     - ``true``
-   * - :spelling:ignore:`enableRuntimeDeviceDetection`
-     - Enables experimental support for the detection of new and removed datapath devices. When devices change the eBPF datapath is reloaded and services updated. If "devices" is set then only those devices, or devices matching a wildcard will be considered.  This option has been deprecated and is a no-op.
      - bool
      - ``true``
    * - :spelling:ignore:`enableXTSocketFallback`
@@ -1347,11 +1367,15 @@
    * - :spelling:ignore:`envoy.image`
      - Envoy container image.
      - object
-     - ``{"digest":"sha256:9e7d25c315f3aa9e5066cc39e25702132311f5ad8416a4d7b5b28377deeaad6e","override":null,"pullPolicy":"Always","repository":"quay.io/cilium/cilium-envoy","tag":"v1.33.2-1744671928-c57114fd0d5919216efde96fcf7a6b1471f6250b","useDigest":true}``
+     - ``{"digest":"sha256:70308d47049f3f64b01c4e6e91d8f36e0d062bbff314bac3d5cd62d6a48299d2","override":null,"pullPolicy":"Always","repository":"quay.io/cilium/cilium-envoy","tag":"v1.33.3-1747986651-573e9d5a05760e9a468426915b7119097c16d83b","useDigest":true}``
    * - :spelling:ignore:`envoy.initialFetchTimeoutSeconds`
      - Time in seconds after which the initial fetch on an xDS stream is considered timed out
      - int
      - ``30``
+   * - :spelling:ignore:`envoy.livenessProbe.enabled`
+     - Enable liveness probe for cilium-envoy
+     - bool
+     - ``true``
    * - :spelling:ignore:`envoy.livenessProbe.failureThreshold`
      - failure threshold of liveness probe
      - int
@@ -1492,6 +1516,10 @@
      - SELinux options for the ``cilium-envoy`` container
      - object
      - ``{"level":"s0","type":"spc_t"}``
+   * - :spelling:ignore:`envoy.startupProbe.enabled`
+     - Enable startup probe for cilium-envoy
+     - bool
+     - ``true``
    * - :spelling:ignore:`envoy.startupProbe.failureThreshold`
      - failure threshold of startup probe. 105 x 2s translates to the old behaviour of the readiness probe (120s delay + 30 x 3s)
      - int
@@ -1554,10 +1582,6 @@
      - ``["https://CHANGE-ME:2379"]``
    * - :spelling:ignore:`etcd.ssl`
      - Enable use of TLS/SSL for connectivity to etcd.
-     - bool
-     - ``false``
-   * - :spelling:ignore:`externalIPs.enabled`
-     - Enable ExternalIPs service support.
      - bool
      - ``false``
    * - :spelling:ignore:`extraArgs`
@@ -1670,10 +1694,6 @@
      - ``{"enabled":false}``
    * - :spelling:ignore:`hostFirewall.enabled`
      - Enables the enforcement of host policies in the eBPF datapath.
-     - bool
-     - ``false``
-   * - :spelling:ignore:`hostPort.enabled`
-     - Enable hostPort service support.
      - bool
      - ``false``
    * - :spelling:ignore:`hubble.annotations`
@@ -1855,7 +1875,7 @@
    * - :spelling:ignore:`hubble.redact`
      - Enables redacting sensitive information present in Layer 7 flows.
      - object
-     - ``{"enabled":false,"http":{"headers":{"allow":[],"deny":[]},"urlQuery":false,"userInfo":true},"kafka":{"apiKey":false}}``
+     - ``{"enabled":false,"http":{"headers":{"allow":[],"deny":[]},"urlQuery":false,"userInfo":true},"kafka":{"apiKey":true}}``
    * - :spelling:ignore:`hubble.redact.http.headers.allow`
      - List of HTTP headers to allow: headers not matching will be redacted. Note: ``allow`` and ``deny`` lists cannot be used both at the same time, only one can be present. Example:   redact:     enabled: true     http:       headers:         allow:           - traceparent           - tracestate           - Cache-Control  You can specify the options from the helm CLI:   --set hubble.redact.enabled="true"   --set hubble.redact.http.headers.allow="traceparent,tracestate,Cache-Control"
      - list
@@ -1875,7 +1895,7 @@
    * - :spelling:ignore:`hubble.redact.kafka.apiKey`
      - Enables redacting Kafka's API key. Example:    redact:     enabled: true     kafka:       apiKey: true  You can specify the options from the helm CLI:    --set hubble.redact.enabled="true"   --set hubble.redact.kafka.apiKey="true"
      - bool
-     - ``false``
+     - ``true``
    * - :spelling:ignore:`hubble.relay.affinity`
      - Affinity for hubble-replay
      - object
@@ -1938,6 +1958,10 @@
      - ``1``
    * - :spelling:ignore:`hubble.relay.podDisruptionBudget.minAvailable`
      - Minimum number/percentage of pods that should remain scheduled. When it's set, maxUnavailable must be disabled by ``maxUnavailable: null``
+     - string
+     - ``nil``
+   * - :spelling:ignore:`hubble.relay.podDisruptionBudget.unhealthyPodEvictionPolicy`
+     - How are unhealthy, but running, pods counted for eviction
      - string
      - ``nil``
    * - :spelling:ignore:`hubble.relay.podLabels`
@@ -2015,7 +2039,7 @@
    * - :spelling:ignore:`hubble.relay.securityContext`
      - hubble-relay container security context
      - object
-     - ``{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"runAsGroup":65532,"runAsNonRoot":true,"runAsUser":65532}``
+     - ``{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"runAsGroup":65532,"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}}``
    * - :spelling:ignore:`hubble.relay.service`
      - hubble-relay service configuration.
      - object
@@ -2199,7 +2223,7 @@
    * - :spelling:ignore:`hubble.ui.backend.securityContext`
      - Hubble-ui backend security context.
      - object
-     - ``{}``
+     - ``{"allowPrivilegeEscalation":false}``
    * - :spelling:ignore:`hubble.ui.baseUrl`
      - Defines base url prefix for all hubble-ui http requests. It needs to be changed in case if ingress for hubble-ui is configured under some sub-path. Trailing ``/`` is required for custom path, ex. ``/service-map/``
      - string
@@ -2231,7 +2255,7 @@
    * - :spelling:ignore:`hubble.ui.frontend.securityContext`
      - Hubble-ui frontend security context.
      - object
-     - ``{}``
+     - ``{"allowPrivilegeEscalation":false}``
    * - :spelling:ignore:`hubble.ui.frontend.server.ipv6`
      - Controls server listener for ipv6
      - object
@@ -2262,6 +2286,10 @@
      - ``1``
    * - :spelling:ignore:`hubble.ui.podDisruptionBudget.minAvailable`
      - Minimum number/percentage of pods that should remain scheduled. When it's set, maxUnavailable must be disabled by ``maxUnavailable: null``
+     - string
+     - ``nil``
+   * - :spelling:ignore:`hubble.ui.podDisruptionBudget.unhealthyPodEvictionPolicy`
+     - How are unhealthy, but running, pods counted for eviction
      - string
      - ``nil``
    * - :spelling:ignore:`hubble.ui.podLabels`
@@ -2859,7 +2887,7 @@
    * - :spelling:ignore:`nodeinit.securityContext`
      - Security context to be added to nodeinit pods.
      - object
-     - ``{"capabilities":{"add":["SYS_MODULE","NET_ADMIN","SYS_ADMIN","SYS_CHROOT","SYS_PTRACE"]},"privileged":false,"seLinuxOptions":{"level":"s0","type":"spc_t"}}``
+     - ``{"allowPrivilegeEscalation":false,"capabilities":{"add":["SYS_MODULE","NET_ADMIN","SYS_ADMIN","SYS_CHROOT","SYS_PTRACE"]},"privileged":false,"seLinuxOptions":{"level":"s0","type":"spc_t"}}``
    * - :spelling:ignore:`nodeinit.startup`
      - startup offers way to customize startup nodeinit script (pre and post position)
      - object
@@ -2956,6 +2984,10 @@
      - Minimum number/percentage of pods that should remain scheduled. When it's set, maxUnavailable must be disabled by ``maxUnavailable: null``
      - string
      - ``nil``
+   * - :spelling:ignore:`operator.podDisruptionBudget.unhealthyPodEvictionPolicy`
+     - How are unhealthy, but running, pods counted for eviction
+     - string
+     - ``nil``
    * - :spelling:ignore:`operator.podLabels`
      - Labels to be added to cilium-operator pods
      - object
@@ -2963,7 +2995,7 @@
    * - :spelling:ignore:`operator.podSecurityContext`
      - Security context to be added to cilium-operator pods
      - object
-     - ``{}``
+     - ``{"seccompProfile":{"type":"RuntimeDefault"}}``
    * - :spelling:ignore:`operator.pprof.address`
      - Configure pprof listen address for cilium-operator
      - string
@@ -3035,7 +3067,7 @@
    * - :spelling:ignore:`operator.securityContext`
      - Security context to be added to cilium-operator pods
      - object
-     - ``{}``
+     - ``{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}``
    * - :spelling:ignore:`operator.setNodeNetworkStatus`
      - Set Node condition NetworkUnavailable to 'false' with the reason 'CiliumIsUp' for nodes that have a healthy Cilium pod.
      - bool
@@ -3083,7 +3115,7 @@
    * - :spelling:ignore:`podSecurityContext`
      - Security Context for cilium-agent pods.
      - object
-     - ``{"appArmorProfile":{"type":"Unconfined"}}``
+     - ``{"appArmorProfile":{"type":"Unconfined"},"seccompProfile":{"type":"RuntimeDefault"}}``
    * - :spelling:ignore:`podSecurityContext.appArmorProfile`
      - AppArmorProfile options for the ``cilium-agent`` and init containers
      - object
@@ -3156,6 +3188,10 @@
      - Minimum number/percentage of pods that should remain scheduled. When it's set, maxUnavailable must be disabled by ``maxUnavailable: null``
      - string
      - ``nil``
+   * - :spelling:ignore:`preflight.podDisruptionBudget.unhealthyPodEvictionPolicy`
+     - How are unhealthy, but running, pods counted for eviction
+     - string
+     - ``nil``
    * - :spelling:ignore:`preflight.podLabels`
      - Labels to be added to the preflight pod.
      - object
@@ -3183,7 +3219,7 @@
    * - :spelling:ignore:`preflight.securityContext`
      - Security context to be added to preflight pods
      - object
-     - ``{}``
+     - ``{"allowPrivilegeEscalation":false}``
    * - :spelling:ignore:`preflight.terminationGracePeriodSeconds`
      - Configure termination grace period for preflight Deployment and DaemonSet.
      - int
@@ -3304,6 +3340,10 @@
      - Annotations to be added to all cilium-secret namespaces (resources under templates/cilium-secrets-namespace)
      - object
      - ``{}``
+   * - :spelling:ignore:`securityContext.allowPrivilegeEscalation`
+     - disable privilege escalation
+     - bool
+     - ``false``
    * - :spelling:ignore:`securityContext.capabilities.applySysctlOverwrites`
      - capabilities for the ``apply-sysctl-overwrites`` init container
      - list

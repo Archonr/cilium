@@ -13,6 +13,7 @@ import (
 	healthApi "github.com/cilium/cilium/api/v1/health/server"
 	"github.com/cilium/cilium/api/v1/server"
 	"github.com/cilium/cilium/daemon/cmd/cni"
+	"github.com/cilium/cilium/daemon/healthz"
 	agentK8s "github.com/cilium/cilium/daemon/k8s"
 	"github.com/cilium/cilium/daemon/restapi"
 	"github.com/cilium/cilium/pkg/api"
@@ -20,21 +21,20 @@ import (
 	"github.com/cilium/cilium/pkg/bgpv1"
 	cgroup "github.com/cilium/cilium/pkg/cgroups/manager"
 	"github.com/cilium/cilium/pkg/ciliumenvoyconfig"
+	ciliumenvoyconfig_legacy "github.com/cilium/cilium/pkg/ciliumenvoyconfig/legacy"
 	"github.com/cilium/cilium/pkg/clustermesh"
 	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	"github.com/cilium/cilium/pkg/controller"
 	"github.com/cilium/cilium/pkg/crypto/certificatemanager"
 	"github.com/cilium/cilium/pkg/datapath"
+	debugapi "github.com/cilium/cilium/pkg/debug/api"
 	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/dial"
 	"github.com/cilium/cilium/pkg/driftchecker"
 	"github.com/cilium/cilium/pkg/dynamicconfig"
 	"github.com/cilium/cilium/pkg/dynamiclifecycle"
 	"github.com/cilium/cilium/pkg/egressgateway"
-	"github.com/cilium/cilium/pkg/endpoint"
-	endpointcreator "github.com/cilium/cilium/pkg/endpoint/creator"
-	"github.com/cilium/cilium/pkg/endpointcleanup"
-	"github.com/cilium/cilium/pkg/endpointmanager"
+	endpoint "github.com/cilium/cilium/pkg/endpoint/cell"
 	"github.com/cilium/cilium/pkg/envoy"
 	fqdn "github.com/cilium/cilium/pkg/fqdn/cell"
 	"github.com/cilium/cilium/pkg/fqdn/defaultdns"
@@ -51,8 +51,9 @@ import (
 	"github.com/cilium/cilium/pkg/k8s/watchers/resources"
 	"github.com/cilium/cilium/pkg/kvstore/store"
 	"github.com/cilium/cilium/pkg/l2announcer"
-	loadbalancer_experimental "github.com/cilium/cilium/pkg/loadbalancer/experimental"
-	redirectpolicy_experimental "github.com/cilium/cilium/pkg/loadbalancer/experimental/redirectpolicy"
+	loadbalancer_cell "github.com/cilium/cilium/pkg/loadbalancer/cell"
+	"github.com/cilium/cilium/pkg/loadbalancer/legacy/redirectpolicy"
+	"github.com/cilium/cilium/pkg/loadbalancer/legacy/service"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/maglev"
 	"github.com/cilium/cilium/pkg/maps/metricsmap"
@@ -70,11 +71,10 @@ import (
 	"github.com/cilium/cilium/pkg/pprof"
 	"github.com/cilium/cilium/pkg/proxy"
 	"github.com/cilium/cilium/pkg/recorder"
-	"github.com/cilium/cilium/pkg/redirectpolicy"
-	"github.com/cilium/cilium/pkg/service"
 	shell "github.com/cilium/cilium/pkg/shell/server"
 	"github.com/cilium/cilium/pkg/signal"
 	"github.com/cilium/cilium/pkg/source"
+	"github.com/cilium/cilium/pkg/status"
 )
 
 var (
@@ -121,14 +121,6 @@ var (
 		server.Cell,
 		cell.Invoke(configureAPIServer),
 
-		// Cilium API handlers
-		cell.Provide(ciliumAPIHandlers),
-
-		// Processes endpoint deletions that occurred while the agent was down.
-		// This starts before the API server as ciliumAPIHandlers() depends on
-		// the 'deletionQueue' provided by this cell.
-		deletionQueueCell,
-
 		// Store cell provides factory for creating watchStore/syncStore/storeManager
 		// useful for synchronizing data from/to kvstore.
 		store.Cell,
@@ -148,6 +140,9 @@ var (
 		// DNSProxy provides the DefaultDNSProxy singleton which is used by different
 		// packages.
 		defaultdns.Cell,
+
+		// Cilium Agent Healthz endpoints (agent, kubeproxy, ...)
+		healthz.Cell,
 	)
 
 	// ControlPlane implement the per-node control functions. These are pure
@@ -184,15 +179,8 @@ var (
 		// be synced
 		k8sSynced.Cell,
 
-		// EndpointManager maintains a collection of the locally running endpoints.
-		endpointmanager.Cell,
-
-		// EndpointCreator helps creating endpoints
-		endpointcreator.Cell,
-
-		// Register the startup procedure to remove stale CiliumEndpoints referencing pods no longer
-		// managed by Cilium.
-		endpointcleanup.Cell,
+		// Endpoint cell provides the Endpoint modules.
+		endpoint.Cell,
 
 		// NodeManager maintains a collection of other nodes in the cluster.
 		nodeManager.Cell,
@@ -213,10 +201,7 @@ var (
 		maglev.Cell,
 
 		// Experimental control-plane for configuring service load-balancing.
-		loadbalancer_experimental.Cell,
-
-		// Experimental control-plane implementation for local redirect policies.
-		redirectpolicy_experimental.Cell,
+		loadbalancer_cell.Cell,
 
 		// Service is a datapath service handler. Its main responsibility is to reflect
 		// service-related changes into BPF maps used by datapath BPF programs.
@@ -234,6 +219,7 @@ var (
 		// CiliumEnvoyConfig provides support for the CRD CiliumEnvoyConfig that backs Ingress, Gateway API
 		// and L7 loadbalancing.
 		ciliumenvoyconfig.Cell,
+		ciliumenvoyconfig_legacy.Cell,
 
 		// Cilium REST API handlers
 		restapi.Cell,
@@ -274,14 +260,12 @@ var (
 
 		// ClusterMesh is the Cilium's multicluster implementation.
 		cell.Config(cmtypes.DefaultClusterInfo),
+		cell.Config(cmtypes.DefaultPolicyConfig),
 		clustermesh.Cell,
 
 		// L2announcer resolves l2announcement policies, services, node labels and devices into a list of IPs+netdevs
 		// which need to be announced on the local network.
 		l2announcer.Cell,
-
-		// RegeneratorCell provides extra options and utilities for endpoints regeneration.
-		endpoint.RegeneratorCell,
 
 		// Redirect policy manages the Local Redirect Policies.
 		redirectpolicy.Cell,
@@ -338,6 +322,12 @@ var (
 
 		// Cilium health infrastructure (host and endpoint connectivity)
 		health.Cell,
+
+		// Cilium Status Collector
+		status.Cell,
+
+		// Cilium Debuginfo API
+		debugapi.Cell,
 	)
 )
 

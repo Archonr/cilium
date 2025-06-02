@@ -11,8 +11,8 @@
 #define DEST_IFINDEX 5
 #define DEST_LXC_ID 200
 
-#include "common.h"
 #include <bpf/ctx/skb.h>
+#include "common.h"
 #include "pktgen.h"
 
 #define skb_change_type mock_skb_change_type
@@ -35,7 +35,7 @@ int mock_skb_get_tunnel_key(__maybe_unused struct __sk_buff *skb,
 	return 0;
 }
 
-__section("mock-handle-policy")
+__section_entry
 int mock_handle_policy(struct __ctx_buff *ctx __maybe_unused)
 {
 	/* https://github.com/cilium/cilium/blob/v1.16.0-pre.1/bpf/bpf_lxc.c#L2040 */
@@ -246,27 +246,10 @@ int ipv6_not_decrypted_ipsec_from_overlay_pktgen(struct __ctx_buff *ctx)
 SETUP("tc", "ipv6_not_decrypted_ipsec_from_overlay")
 int ipv6_not_decrypted_ipsec_from_overlay_setup(struct __ctx_buff *ctx)
 {
-	/* To be able to use memcpy, we need to ensure that the memcpy'ed field is
-	 * 8B aligned on the stack. Given the existing node_ip struct, the only way
-	 * to achieve that is to align a parent tmp struct.
-	 * We can't simply use __bpf_memcpy_builtin because that causes a
-	 * relocation error in the lib.
-	 */
-	struct tmp {
-		__u32 _;
-		struct node_key k;
-	} node_ip __align_stack_8 = {};
-	struct node_value node_value = {
-		.id = NODE_ID,
-		.spi = 0,
-	};
-
 	/* We need to populate the node ID map because we'll lookup into it on
 	 * ingress to find the node ID to use to match against XFRM IN states.
 	 */
-	node_ip.k.family = ENDPOINT_KEY_IPV6;
-	memcpy((__u8 *)&node_ip.k.ip6, (__u8 *)v6_pod_one, 16);
-	map_update_elem(&cilium_node_map_v2, &node_ip.k, &node_value, BPF_ANY);
+	node_v6_add_entry((union v6addr *)v6_pod_one, NODE_ID, 0);
 
 	tail_call_static(ctx, entry_call_map, FROM_OVERLAY);
 	return TEST_ERROR;

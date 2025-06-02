@@ -326,6 +326,11 @@ func (r *gatewayReconciler) getGatewayClassConfig(ctx context.Context, gwc *gate
 
 func parentRefMatched(gw *gatewayv1.Gateway, listener *gatewayv1.Listener, routeNamespace string, refs []gatewayv1.ParentReference) bool {
 	for _, ref := range refs {
+		// Check if the parentRef is a Gateway before checking name and namespace
+		if !helpers.IsGateway(ref) {
+			continue
+		}
+
 		if string(ref.Name) == gw.GetName() && gw.GetNamespace() == helpers.NamespaceDerefOr(ref.Namespace, routeNamespace) {
 			if ref.SectionName == nil && ref.Port == nil {
 				return true
@@ -466,6 +471,7 @@ func (r *gatewayReconciler) setListenerStatus(ctx context.Context, gw *gatewayv1
 
 	for _, l := range gw.Spec.Listeners {
 		allSupported := getSupportedRouteKinds(l.Protocol)
+		// Avoid predefining to prevent ineffassign warning.
 		var supportedKinds []gatewayv1.RouteGroupKind
 		isValid := true
 

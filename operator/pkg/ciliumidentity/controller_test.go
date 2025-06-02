@@ -40,7 +40,7 @@ const (
 func TestRegisterControllerWithOperatorManagingCIDs(t *testing.T) {
 	cidResource, cesResource, fakeClient, m, h := initHiveTest(t, true)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	tlog := hivetest.Logger(t)
 	if err := h.Start(tlog, ctx); err != nil {
 		t.Fatalf("starting hive encountered an error: %s", err)
@@ -76,7 +76,7 @@ func TestRegisterControllerWithOperatorManagingCIDs(t *testing.T) {
 func TestRegisterController(t *testing.T) {
 	cidResource, _, fakeClient, m, h := initHiveTest(t, false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	tlog := hivetest.Logger(t)
 	if err := h.Start(tlog, ctx); err != nil {
 		t.Fatalf("starting hive encountered an error: %s", err)
@@ -133,9 +133,7 @@ func initHiveTest(t *testing.T, operatorManagingCID bool) (*resource.Resource[*c
 		}),
 		cell.Provide(func(lc cell.Lifecycle, p types.Provider, jr job.Registry) job.Group {
 			h := p.ForModule(cell.FullModuleID{"test"})
-			jg := jr.NewGroup(h)
-			lc.Append(jg)
-			return jg
+			return jr.NewGroup(h, lc)
 		}),
 		cell.Invoke(func(p params) error {
 			registerController(p)
@@ -191,7 +189,7 @@ func verifyCIDUsageInCES(ctx context.Context, fakeClient *k8sClient.FakeClientse
 		return err
 	}
 
-	cesStore, _ := cesResource.Store(context.Background())
+	cesStore, _ := cesResource.Store(ctx)
 	if err := testutils.WaitUntil(func() bool {
 		return len(cesStore.List()) > 0
 	}, WaitUntilTimeout); err != nil {
@@ -226,7 +224,7 @@ func TestCreateTwoPodsWithSameLabels(t *testing.T) {
 
 	// Start test hive.
 	cidResource, _, fakeClient, _, h := initHiveTest(t, true)
-	ctx, cancelCtxFunc := context.WithCancel(context.Background())
+	ctx, cancelCtxFunc := context.WithCancel(t.Context())
 	tlog := hivetest.Logger(t)
 	if err := h.Start(tlog, ctx); err != nil {
 		t.Fatalf("starting hive encountered an error: %s", err)
@@ -299,7 +297,7 @@ func TestUpdatePodLabels(t *testing.T) {
 
 	// Start test hive.
 	cidResource, _, fakeClient, _, h := initHiveTest(t, true)
-	ctx, cancelCtxFunc := context.WithCancel(context.Background())
+	ctx, cancelCtxFunc := context.WithCancel(t.Context())
 	tlog := hivetest.Logger(t)
 	if err := h.Start(tlog, ctx); err != nil {
 		t.Fatalf("starting hive encountered an error: %s", err)
@@ -366,7 +364,7 @@ func TestUpdateUsedCIDIsReverted(t *testing.T) {
 
 	// Start test hive.
 	cidResource, _, fakeClient, _, h := initHiveTest(t, true)
-	ctx, cancelCtxFunc := context.WithCancel(context.Background())
+	ctx, cancelCtxFunc := context.WithCancel(t.Context())
 	tlog := hivetest.Logger(t)
 	if err := h.Start(tlog, ctx); err != nil {
 		t.Fatalf("starting hive encountered an error: %s", err)
@@ -446,7 +444,7 @@ func TestDeleteUsedCIDIsRecreated(t *testing.T) {
 
 	// Start test hive.
 	cidResource, _, fakeClient, _, h := initHiveTest(t, true)
-	ctx, cancelCtxFunc := context.WithCancel(context.Background())
+	ctx, cancelCtxFunc := context.WithCancel(t.Context())
 	tlog := hivetest.Logger(t)
 	if err := h.Start(tlog, ctx); err != nil {
 		t.Fatalf("starting hive encountered an error: %s", err)
