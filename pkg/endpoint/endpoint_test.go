@@ -52,15 +52,16 @@ type EndpointSuite struct {
 
 func setupEndpointSuite(tb testing.TB) *EndpointSuite {
 	testutils.IntegrationTest(tb)
+	logger := hivetest.Logger(tb)
 
 	s := &EndpointSuite{
 		orchestrator: &fakeTypes.FakeOrchestrator{},
-		repo:         policy.NewPolicyRepository(hivetest.Logger(tb), nil, nil, nil, nil, api.NewPolicyMetricsNoop()),
-		mgr:          cache.NewCachingIdentityAllocator(&testidentity.IdentityAllocatorOwnerMock{}, cache.AllocatorConfig{}),
+		repo:         policy.NewPolicyRepository(logger, nil, nil, nil, nil, api.NewPolicyMetricsNoop()),
+		mgr:          cache.NewCachingIdentityAllocator(logger, &testidentity.IdentityAllocatorOwnerMock{}, cache.AllocatorConfig{}),
 	}
 
 	// GetConfig the default labels prefix filter
-	err := labelsfilter.ParseLabelPrefixCfg(nil, nil, "")
+	err := labelsfilter.ParseLabelPrefixCfg(logger, nil, nil, "")
 	if err != nil {
 		panic("ParseLabelPrefixCfg() failed")
 	}
@@ -199,9 +200,10 @@ func TestEndpointDatapathOptions(t *testing.T) {
 
 func TestEndpointUpdateLabels(t *testing.T) {
 	s := setupEndpointSuite(t)
+	logger := hivetest.Logger(t)
 
 	model := newTestEndpointModel(100, StateWaitingForIdentity)
-	e, err := NewEndpointFromChangeModel(t.Context(), nil, &MockEndpointBuildQueue{}, nil, s.orchestrator, nil, nil, nil, identitymanager.NewIDManager(), nil, nil, s.repo, testipcache.NewMockIPCache(), &FakeEndpointProxy{}, testidentity.NewMockIdentityAllocator(nil), ctmap.NewFakeGCRunner(), nil, model)
+	e, err := NewEndpointFromChangeModel(t.Context(), nil, &MockEndpointBuildQueue{}, nil, s.orchestrator, nil, nil, nil, identitymanager.NewIDManager(logger), nil, nil, s.repo, testipcache.NewMockIPCache(), &FakeEndpointProxy{}, testidentity.NewMockIdentityAllocator(nil), ctmap.NewFakeGCRunner(), nil, model)
 	require.NoError(t, err)
 
 	e.Start(uint16(model.ID))
@@ -245,9 +247,10 @@ func TestEndpointUpdateLabels(t *testing.T) {
 
 func TestEndpointState(t *testing.T) {
 	s := setupEndpointSuite(t)
+	logger := hivetest.Logger(t)
 
 	model := newTestEndpointModel(100, StateWaitingForIdentity)
-	e, err := NewEndpointFromChangeModel(t.Context(), nil, &MockEndpointBuildQueue{}, nil, s.orchestrator, nil, nil, nil, identitymanager.NewIDManager(), nil, nil, s.repo, testipcache.NewMockIPCache(), &FakeEndpointProxy{}, testidentity.NewMockIdentityAllocator(nil), ctmap.NewFakeGCRunner(), nil, model)
+	e, err := NewEndpointFromChangeModel(t.Context(), nil, &MockEndpointBuildQueue{}, nil, s.orchestrator, nil, nil, nil, identitymanager.NewIDManager(logger), nil, nil, s.repo, testipcache.NewMockIPCache(), &FakeEndpointProxy{}, testidentity.NewMockIdentityAllocator(nil), ctmap.NewFakeGCRunner(), nil, model)
 	require.NoError(t, err)
 	e.Start(uint16(model.ID))
 	t.Cleanup(e.Stop)
@@ -624,6 +627,7 @@ func (n *EndpointDeadlockEvent) Handle(ifc chan any) {
 // https://github.com/cilium/cilium/pull/8687 .
 func TestEndpointEventQueueDeadlockUponStop(t *testing.T) {
 	s := setupEndpointSuite(t)
+	logger := hivetest.Logger(t)
 
 	// Need to modify global configuration (hooray!), change back when test is
 	// done.
@@ -634,7 +638,7 @@ func TestEndpointEventQueueDeadlockUponStop(t *testing.T) {
 	}()
 
 	model := newTestEndpointModel(12345, StateReady)
-	ep, err := NewEndpointFromChangeModel(t.Context(), nil, &MockEndpointBuildQueue{}, nil, s.orchestrator, nil, nil, nil, identitymanager.NewIDManager(), nil, nil, s.repo, testipcache.NewMockIPCache(), &FakeEndpointProxy{}, testidentity.NewMockIdentityAllocator(nil), ctmap.NewFakeGCRunner(), nil, model)
+	ep, err := NewEndpointFromChangeModel(t.Context(), nil, &MockEndpointBuildQueue{}, nil, s.orchestrator, nil, nil, nil, identitymanager.NewIDManager(logger), nil, nil, s.repo, testipcache.NewMockIPCache(), &FakeEndpointProxy{}, testidentity.NewMockIdentityAllocator(nil), ctmap.NewFakeGCRunner(), nil, model)
 	require.NoError(t, err)
 
 	ep.Start(uint16(model.ID))
@@ -713,9 +717,10 @@ func TestEndpointEventQueueDeadlockUponStop(t *testing.T) {
 
 func BenchmarkEndpointGetModel(b *testing.B) {
 	s := setupEndpointSuite(b)
+	logger := hivetest.Logger(b)
 
 	model := newTestEndpointModel(100, StateWaitingForIdentity)
-	e, err := NewEndpointFromChangeModel(b.Context(), nil, &MockEndpointBuildQueue{}, nil, s.orchestrator, nil, nil, nil, identitymanager.NewIDManager(), nil, nil, s.repo, testipcache.NewMockIPCache(), &FakeEndpointProxy{}, testidentity.NewMockIdentityAllocator(nil), ctmap.NewFakeGCRunner(), nil, model)
+	e, err := NewEndpointFromChangeModel(b.Context(), nil, &MockEndpointBuildQueue{}, nil, s.orchestrator, nil, nil, nil, identitymanager.NewIDManager(logger), nil, nil, s.repo, testipcache.NewMockIPCache(), &FakeEndpointProxy{}, testidentity.NewMockIdentityAllocator(nil), ctmap.NewFakeGCRunner(), nil, model)
 	require.NoError(b, err)
 
 	e.Start(uint16(model.ID))
@@ -757,6 +762,7 @@ func (e *Endpoint) getK8sPodLabels() labels.Labels {
 
 func TestMetadataResolver(t *testing.T) {
 	s := setupEndpointSuite(t)
+	logger := hivetest.Logger(t)
 
 	tests := []struct {
 		name            string
@@ -792,7 +798,7 @@ func TestMetadataResolver(t *testing.T) {
 		for _, tt := range tests {
 			t.Run(fmt.Sprintf("%s (restored=%t)", tt.name, restored), func(t *testing.T) {
 				model := newTestEndpointModel(100, StateWaitingForIdentity)
-				ep, err := NewEndpointFromChangeModel(t.Context(), nil, &MockEndpointBuildQueue{}, nil, s.orchestrator, nil, &fakeTypes.BandwidthManager{}, nil, identitymanager.NewIDManager(), nil, nil, s.repo, testipcache.NewMockIPCache(), &FakeEndpointProxy{},
+				ep, err := NewEndpointFromChangeModel(t.Context(), nil, &MockEndpointBuildQueue{}, nil, s.orchestrator, nil, &fakeTypes.BandwidthManager{}, nil, identitymanager.NewIDManager(logger), nil, nil, s.repo, testipcache.NewMockIPCache(), &FakeEndpointProxy{},
 					testidentity.NewMockIdentityAllocator(nil), ctmap.NewFakeGCRunner(), nil, model)
 				require.NoError(t, err)
 

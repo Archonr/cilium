@@ -17,11 +17,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/cilium/cilium/api/v1/models"
+	"github.com/cilium/cilium/api/v1/server"
 	cnicell "github.com/cilium/cilium/daemon/cmd/cni"
 	fakecni "github.com/cilium/cilium/daemon/cmd/cni/fake"
 	"github.com/cilium/cilium/pkg/controller"
 	fakeDatapath "github.com/cilium/cilium/pkg/datapath/fake"
 	"github.com/cilium/cilium/pkg/datapath/prefilter"
+	endpointapi "github.com/cilium/cilium/pkg/endpoint/api"
 	"github.com/cilium/cilium/pkg/envoy"
 	"github.com/cilium/cilium/pkg/fqdn/defaultdns"
 	fqdnproxy "github.com/cilium/cilium/pkg/fqdn/proxy"
@@ -31,7 +33,7 @@ import (
 	"github.com/cilium/cilium/pkg/kvstore"
 	"github.com/cilium/cilium/pkg/kvstore/store"
 	"github.com/cilium/cilium/pkg/labelsfilter"
-	"github.com/cilium/cilium/pkg/loadbalancer/experimental"
+	"github.com/cilium/cilium/pkg/loadbalancer"
 	"github.com/cilium/cilium/pkg/maps/ctmap"
 	"github.com/cilium/cilium/pkg/maps/policymap"
 	"github.com/cilium/cilium/pkg/metrics"
@@ -56,9 +58,10 @@ type DaemonSuite struct {
 	// as returned by policy.GetPolicyEnabled().
 	oldPolicyEnabled string
 
-	PolicyImporter policycell.PolicyImporter
-	envoyXdsServer envoy.XDSServer
-	dnsProxy       defaultdns.Proxy
+	PolicyImporter     policycell.PolicyImporter
+	envoyXdsServer     envoy.XDSServer
+	dnsProxy           defaultdns.Proxy
+	endpointAPIManager endpointapi.EndpointAPIManager
 }
 
 func setupTestDirectories() string {
@@ -96,7 +99,9 @@ func TestMain(m *testing.M) {
 func setupDaemonSuite(tb testing.TB) *DaemonSuite {
 	testutils.IntegrationTest(tb)
 
-	ds := &DaemonSuite{}
+	ds := &DaemonSuite{
+		log: hivetest.Logger(tb),
+	}
 	ctx := context.Background()
 
 	ds.oldPolicyEnabled = policy.GetPolicyEnabled()
@@ -115,9 +120,10 @@ func setupDaemonSuite(tb testing.TB) *DaemonSuite {
 			func() ctmap.GCRunner { return ctmap.NewFakeGCRunner() },
 			func() policymap.Factory { return nil },
 			k8sSynced.RejectedCRDSyncPromise,
-			func() *experimental.TestConfig {
-				return &experimental.TestConfig{}
+			func() *loadbalancer.TestConfig {
+				return &loadbalancer.TestConfig{}
 			},
+			func() *server.Server { return nil },
 		),
 		fakeDatapath.Cell,
 		prefilter.Cell,
@@ -138,6 +144,9 @@ func setupDaemonSuite(tb testing.TB) *DaemonSuite {
 		cell.Invoke(func(dnsProxy defaultdns.Proxy) {
 			ds.dnsProxy = dnsProxy
 		}),
+		cell.Invoke(func(endpointAPIManager endpointapi.EndpointAPIManager) {
+			ds.endpointAPIManager = endpointAPIManager
+		}),
 	)
 
 	// bootstrap global config
@@ -148,7 +157,6 @@ func setupDaemonSuite(tb testing.TB) *DaemonSuite {
 	option.Config.RunDir = testRunDir
 	option.Config.StateDir = testRunDir
 
-	ds.log = hivetest.Logger(tb)
 	err := ds.hive.Start(ds.log, ctx)
 	require.NoError(tb, err)
 
@@ -194,13 +202,13 @@ func (ds *DaemonSuite) setupConfigOptions() {
 	// run.
 	mockCmd := &cobra.Command{}
 	ds.hive.RegisterFlags(mockCmd.Flags())
-	InitGlobalFlags(mockCmd, ds.hive.Viper())
-	option.Config.Populate(ds.hive.Viper())
+	InitGlobalFlags(ds.log, mockCmd, ds.hive.Viper())
+	option.Config.Populate(ds.log, ds.hive.Viper())
 	option.Config.IdentityAllocationMode = option.IdentityAllocationModeKVstore
 	option.Config.DryMode = true
 	option.Config.Opts = option.NewIntOptions(&option.DaemonMutableOptionLibrary)
 	// GetConfig the default labels prefix filter
-	err := labelsfilter.ParseLabelPrefixCfg(nil, nil, "")
+	err := labelsfilter.ParseLabelPrefixCfg(ds.log, nil, nil, "")
 	if err != nil {
 		panic("ParseLabelPrefixCfg() failed")
 	}
@@ -241,10 +249,4 @@ func (ds *DaemonSuite) updatePolicy(upd *policyTypes.PolicyUpdate) {
 	upd.DoneChan = dc
 	ds.PolicyImporter.UpdatePolicy(upd)
 	<-dc
-}
-
-func TestMemoryMap(t *testing.T) {
-	pid := os.Getpid()
-	m := memoryMap(pid)
-	require.NotEmpty(t, m)
 }

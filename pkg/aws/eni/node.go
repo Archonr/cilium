@@ -293,7 +293,7 @@ func isSubnetAtPrefixCapacity(err error) bool {
 	return false
 }
 
-// AllocateIPs performs the ENI allocation oepration
+// AllocateIPs performs the ENI allocation operation
 func (n *Node) AllocateIPs(ctx context.Context, a *ipam.AllocationAction) error {
 	// Check if the interface to allocate on is prefix delegated
 	n.mutex.RLock()
@@ -509,7 +509,7 @@ func (n *Node) CreateInterface(ctx context.Context, allocation *ipam.AllocationA
 
 	scopedLog.Info("Created new ENI", fieldEniID, eniID)
 
-	if subnet.CIDR != nil {
+	if subnet.CIDR.IsValid() {
 		eni.Subnet.CIDR = subnet.CIDR.String()
 	}
 

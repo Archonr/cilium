@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -20,9 +21,15 @@ const logrErrorKey = "err"
 
 var slogHandlerOpts = &slog.HandlerOptions{
 	AddSource:   false,
-	Level:       slog.LevelInfo,
+	Level:       slogLeveler,
 	ReplaceAttr: ReplaceAttrFnWithoutTimestamp,
 }
+
+var slogLeveler = func() *slog.LevelVar {
+	var levelVar slog.LevelVar
+	levelVar.Set(slog.LevelInfo)
+	return &levelVar
+}()
 
 // Default slog logger. Will be overwritten once initializeSlog is called.
 var DefaultSlogLogger *slog.Logger = slog.New(slog.NewTextHandler(
@@ -85,6 +92,10 @@ func initializeSlog(logOpts LogOptions, loggers []string) {
 	}
 }
 
+func ReplaceAttrFn(groups []string, a slog.Attr) slog.Attr {
+	return replaceAttrFn(groups, a)
+}
+
 func replaceAttrFn(groups []string, a slog.Attr) slog.Attr {
 	switch a.Key {
 	case slog.TimeKey:
@@ -134,12 +145,33 @@ type FieldLogger interface {
 	ErrorContext(ctx context.Context, msg string, args ...any)
 }
 
+func init() {
+	// Set a no-op exit handler to avoid nil dereference
+	a := func() {}
+	exitHandler.Store(&a)
+}
+
+var (
+	exitHandler atomic.Pointer[func()]
+)
+
 func Fatal(logger FieldLogger, msg string, args ...any) {
 	logger.Error(msg, args...)
+	(*exitHandler.Load())()
 	os.Exit(-1)
 }
 
 func Panic(logger FieldLogger, msg string, args ...any) {
 	logger.Error(msg, args...)
+	(*exitHandler.Load())()
 	panic(msg)
+}
+
+func RegisterExitHandler(handler func()) {
+	exitHandler.Store(&handler)
+}
+
+// SetSlogLevel updates the DefaultSlogLogger with a new logrus.Level
+func SetSlogLevel(logLevel slog.Level) {
+	slogLeveler.Set(logLevel)
 }

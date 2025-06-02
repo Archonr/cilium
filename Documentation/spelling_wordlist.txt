@@ -99,6 +99,7 @@ O'Reilly
 PaaS
 Palantir
 Pepelnjak
+Perfdash
 Pfaff
 PodCIDR
 Polytechnique
@@ -123,6 +124,7 @@ Talos
 Telco
 Terraform
 Tierney
+ToR
 Triagers
 Twilio
 Uncompress
@@ -323,6 +325,7 @@ endpointSelector
 endpointmanager
 enet
 enetc
+eni
 enqueuing
 etcd
 etcdinit
@@ -372,6 +375,7 @@ goroutine
 goroutines
 grafana
 graphviz
+gsutil
 gve
 hairpinned
 hardcode
@@ -457,6 +461,7 @@ json
 k8sServiceHost
 k8sServiceLookupConfigMapName
 k8sServiceLookupNamespace
+kOps
 kTLS
 kafka
 kallsyms

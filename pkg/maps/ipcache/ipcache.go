@@ -14,6 +14,7 @@ import (
 	"github.com/cilium/cilium/pkg/bpf"
 	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	"github.com/cilium/cilium/pkg/ebpf"
+	"github.com/cilium/cilium/pkg/metrics"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/types"
 )
@@ -174,10 +175,10 @@ type RemoteEndpointInfo struct {
 
 func (v *RemoteEndpointInfo) String() string {
 	return fmt.Sprintf("identity=%d encryptkey=%d tunnelendpoint=%s flags=%s",
-		v.SecurityIdentity, v.Key, v.getTunnelEndpoint(), v.Flags)
+		v.SecurityIdentity, v.Key, v.GetTunnelEndpoint(), v.Flags)
 }
 
-func (v *RemoteEndpointInfo) getTunnelEndpoint() net.IP {
+func (v *RemoteEndpointInfo) GetTunnelEndpoint() net.IP {
 	if v.Flags&FlagIPv6TunnelEndpoint == 0 {
 		return v.TunnelEndpoint[:4]
 	}
@@ -254,9 +255,9 @@ func newIPCacheMapV1(name string) *bpf.Map {
 }
 
 // NewMap instantiates a Map.
-func NewMap(name string) *Map {
+func NewMap(registry *metrics.Registry, name string) *Map {
 	return &Map{
-		Map: *newIPCacheMap(name).WithCache().WithPressureMetric().
+		Map: *newIPCacheMap(name).WithCache().WithPressureMetric(registry).
 			WithEvents(option.Config.GetEventBufferConfig(name)),
 	}
 }
@@ -274,9 +275,9 @@ var (
 
 // IPCacheMap gets the ipcache Map singleton. If it has not already been done,
 // this also initializes the Map.
-func IPCacheMap() *Map {
+func IPCacheMap(registry *metrics.Registry) *Map {
 	once.Do(func() {
-		ipcache = NewMap(Name)
+		ipcache = NewMap(registry, Name)
 	})
 	return ipcache
 }

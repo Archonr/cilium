@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 /* Copyright Authors of Cilium */
 
-#include "common.h"
 #include <bpf/ctx/skb.h>
+#include "common.h"
 #include <node_config.h>
 
 #include "builtin_test.h"
@@ -36,7 +36,7 @@ int test_builtin_memcmp(__maybe_unused struct __ctx_buff *ctx)
 
 	int i;
 
-	for (i = 0; i < 100; i++) {
+	for (i = 0; i < 70; i++) {
 		/* ./builtin_gen memcmp 32 > builtin_memcmp.h */
 		#include "builtin_memcmp.h"
 	}
