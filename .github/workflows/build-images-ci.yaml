@@ -11,6 +11,7 @@ on:
     branches:
       - main
       - ft/main/**
+      - 'fix-gatewayapi-grpcroute-attachment-conformance'
   merge_group:
     types: [checks_requested]
 

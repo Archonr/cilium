@@ -500,6 +500,8 @@ func (r *gatewayReconciler) setListenerStatus(ctx context.Context, gw *gatewayv1
 
 		var conds []metav1.Condition
 
+		fmt.Printf("DEBUG: Listener: %s, SupportedKinds: %#v, Conditions: %#v\n", l.Name, supportedKinds, conds)
+
 		if l.TLS != nil {
 			for _, cert := range l.TLS.CertificateRefs {
 				if !helpers.IsSecret(cert) {
