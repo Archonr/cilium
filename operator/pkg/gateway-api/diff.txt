@@ -1,0 +1,499 @@
+commit 48c82c99ddbb9fe38a509f5b67dc05665585dda5
+Author: Vlad Korkach <v.korkach@playson.com>
+Date:   Sat Apr 19 14:02:08 2025 +0200
+
+    gateway-api: support attaching GRPCRoute to HTTP/HTTPS listeners
+    
+    This patch extends the Cilium Gateway API implementation to support GRPCRoute
+    attachment to HTTP/HTTPS listeners, following the spec behavior similar to Istio.
+    
+    - Adds GRPCRoute to listener's attachedRoutes
+    - Allows AllowedRoutes to include GRPCRoute for HTTP/HTTPS
+    - Updates listener status logic to recognize GRPCRoutes
+    
+    Fixes: #39021
+    
+    Signed-off-by: Archonr <archonr94@gmail.com>
+    Signed-off-by: Vlad Korkach <v.korkach@playson.com>
+
+diff --git a/operator/pkg/gateway-api/gateway_reconcile.go b/operator/pkg/gateway-api/gateway_reconcile.go
+index de3e2778dd..9473517b46 100644
+--- a/operator/pkg/gateway-api/gateway_reconcile.go
++++ b/operator/pkg/gateway-api/gateway_reconcile.go
+@@ -287,6 +287,25 @@ func (r *gatewayReconciler) filterHTTPRoutesByListener(ctx context.Context, gw *
+ 	return filtered
+ }
+ 
++func (r *gatewayReconciler) filterGRPCRoutesByListener(ctx context.Context, gw *gatewayv1.Gateway, listener *gatewayv1.Listener) []gatewayv1.GRPCRoute {
++	var grpcRouteList gatewayv1.GRPCRouteList
++	if err := r.Client.List(ctx, &grpcRouteList); err != nil {
++		return nil
++	}
++
++	var filtered []gatewayv1.GRPCRoute
++	for _, route := range grpcRouteList.Items {
++		if isAttachable(ctx, gw, &route, route.Status.Parents) &&
++			isAllowed(ctx, r.Client, gw, &route, r.logger) &&
++			len(computeHostsForListener(listener, route.Spec.Hostnames, nil)) > 0 &&
++			parentRefMatched(gw, listener, route.GetNamespace(), route.Spec.ParentRefs) {
++			filtered = append(filtered, route)
++		}
++	}
++	return filtered
++}
++
++
+ // getGatewayClassConfig returns the CiliumGatewayClassConfig referenced by the GatewayClass.
+ // If the GatewayClass does not reference a CiliumGatewayClassConfig, it returns nil.
+ func (r *gatewayReconciler) getGatewayClassConfig(ctx context.Context, gwc *gatewayv1.GatewayClass) *v2alpha1.CiliumGatewayClassConfig {
+@@ -453,45 +472,28 @@ func (r *gatewayReconciler) setListenerStatus(ctx context.Context, gw *gatewayv1
+ 
+ 	for _, l := range gw.Spec.Listeners {
+ 		isValid := true
+-
+-		// SupportedKinds is a required field, so we can't declare it as nil.
+-		supportedKinds := []gatewayv1.RouteGroupKind{}
+-		invalidRouteKinds := false
+-		protoGroup, protoKind := getSupportedGroupKind(l.Protocol)
++		supportedKinds := getSupportedRouteKinds(l.Protocol)
+ 
+ 		if l.AllowedRoutes != nil && len(l.AllowedRoutes.Kinds) != 0 {
++			allowedKindsMap := make(map[gatewayv1.RouteGroupKind]struct{})
+ 			for _, k := range l.AllowedRoutes.Kinds {
+-				if groupDerefOr(k.Group, gatewayv1.GroupName) == string(*protoGroup) &&
+-					k.Kind == protoKind {
+-					supportedKinds = append(supportedKinds, k)
+-				} else {
+-					invalidRouteKinds = true
++				allowedKindsMap[k] = struct{}{}
++			}
++
++			filteredSupportedKinds := []gatewayv1.RouteGroupKind{}
++			for _, sk := range supportedKinds {
++				if _, ok := allowedKindsMap[sk]; ok {
++					filteredSupportedKinds = append(filteredSupportedKinds, sk)
+ 				}
+ 			}
+-		} else {
+-			g, k := getSupportedGroupKind(l.Protocol)
+-			supportedKinds = []gatewayv1.RouteGroupKind{
+-				{
+-					Group: g,
+-					Kind:  k,
+-				},
++
++			if len(filteredSupportedKinds) == 0 {
++				isValid = false
+ 			}
++			supportedKinds = filteredSupportedKinds
+ 		}
++
+ 		var conds []metav1.Condition
+-		if invalidRouteKinds {
+-			conds = append(conds, gatewayListenerInvalidRouteKinds(gw, "Invalid Route Kinds"))
+-			isValid = false
+-		} else {
+-			conds = append(conds, gatewayListenerProgrammedCondition(gw, true, "Listener Programmed"))
+-			conds = append(conds, gatewayListenerAcceptedCondition(gw, true, "Listener Accepted"))
+-			conds = append(conds, metav1.Condition{
+-				Type:               string(gatewayv1.ListenerConditionResolvedRefs),
+-				Status:             metav1.ConditionTrue,
+-				Reason:             string(gatewayv1.ListenerReasonResolvedRefs),
+-				Message:            "Resolved Refs",
+-				LastTransitionTime: metav1.Now(),
+-			})
+-		}
+ 
+ 		if l.TLS != nil {
+ 			for _, cert := range l.TLS.CertificateRefs {
+@@ -534,18 +536,24 @@ func (r *gatewayReconciler) setListenerStatus(ctx context.Context, gw *gatewayv1
+ 		}
+ 
+ 		if !isValid {
+-			conds = merge(conds, metav1.Condition{
+-				Type:               string(gatewayv1.ListenerConditionProgrammed),
+-				Status:             metav1.ConditionFalse,
+-				Reason:             string(gatewayv1.ListenerReasonInvalid),
+-				Message:            "Invalid CertificateRef",
+-				LastTransitionTime: metav1.Now(),
+-			})
++			conds = append(conds, gatewayListenerInvalidRouteKinds(gw, "Invalid Route Kinds"))
++		} else {
++			conds = append(conds,
++				gatewayListenerProgrammedCondition(gw, true, "Listener Programmed"),
++				gatewayListenerAcceptedCondition(gw, true, "Listener Accepted"),
++				metav1.Condition{
++					Type:               string(gatewayv1.ListenerConditionResolvedRefs),
++					Status:             metav1.ConditionTrue,
++					Reason:             string(gatewayv1.ListenerReasonResolvedRefs),
++					Message:            "Resolved Refs",
++					LastTransitionTime: metav1.Now(),
++				})
+ 		}
+ 
+ 		var attachedRoutes int32
+ 		attachedRoutes += int32(len(r.filterHTTPRoutesByListener(ctx, gw, &l, httpRoutes.Items)))
+ 		attachedRoutes += int32(len(r.filterTLSRoutesByListener(ctx, gw, &l, tlsRoutes.Items)))
++		attachedRoutes += int32(len(r.filterGRPCRoutesByListener(ctx, gw, &l)))
+ 
+ 		found := false
+ 		for i := range gw.Status.Listeners {
+@@ -567,7 +575,6 @@ func (r *gatewayReconciler) setListenerStatus(ctx context.Context, gw *gatewayv1
+ 		}
+ 	}
+ 
+-	// filter listener status to only have active listeners
+ 	var newListenersStatus []gatewayv1.ListenerStatus
+ 	for _, ls := range gw.Status.Listeners {
+ 		for _, l := range gw.Spec.Listeners {
+@@ -581,6 +588,7 @@ func (r *gatewayReconciler) setListenerStatus(ctx context.Context, gw *gatewayv1
+ 	return nil
+ }
+ 
++
+ func validateTLSSecret(ctx context.Context, c client.Client, namespace, name string) error {
+ 	secret := &corev1.Secret{}
+ 	if err := c.Get(ctx, client.ObjectKey{
+diff --git a/operator/pkg/gateway-api/helpers.go b/operator/pkg/gateway-api/helpers.go
+index e6f92ef084..232a45cabd 100644
+--- a/operator/pkg/gateway-api/helpers.go
++++ b/operator/pkg/gateway-api/helpers.go
+@@ -21,6 +21,7 @@ import (
+ const (
+ 	kindGateway   = "Gateway"
+ 	kindHTTPRoute = "HTTPRoute"
++	kindGRPCRoute = "GRPCRoute"
+ 	kindTLSRoute  = "TLSRoute"
+ 	kindUDPRoute  = "UDPRoute"
+ 	kindTCPRoute  = "TCPRoute"
+@@ -107,6 +108,9 @@ func isKindAllowed(listener gatewayv1.Listener, route metav1.Object) bool {
+ 		} else if (kind.Group == nil || string(*kind.Group) == gatewayv1alpha2.GroupName) &&
+ 			kind.Kind == kindTLSRoute && routeKind == kindTLSRoute {
+ 			return true
++		} else if (kind.Group == nil || string(*kind.Group) == gatewayv1.GroupName) &&
++			kind.Kind == kindGRPCRoute && routeKind == kindGRPCRoute {
++			return true
+ 		}
+ 	}
+ 	return false
+@@ -133,22 +137,45 @@ func toStringSlice[T ~string](s []T) []string {
+ 	return res
+ }
+ 
+-func getSupportedGroupKind(protocol gatewayv1.ProtocolType) (*gatewayv1.Group, gatewayv1.Kind) {
++func getSupportedRouteKinds(protocol gatewayv1.ProtocolType) []gatewayv1.RouteGroupKind {
+ 	switch protocol {
++	case gatewayv1.HTTPProtocolType, gatewayv1.HTTPSProtocolType:
++		return []gatewayv1.RouteGroupKind{
++			{
++				Group: GroupPtr(gatewayv1.GroupName),
++				Kind:  kindHTTPRoute,
++			},
++			{
++				Group: GroupPtr(gatewayv1.GroupName),
++				Kind:  kindGRPCRoute,
++			},
++		}
+ 	case gatewayv1.TLSProtocolType:
+-		return GroupPtr(gatewayv1alpha2.GroupName), kindTLSRoute
+-	case gatewayv1.HTTPSProtocolType:
+-		return GroupPtr(gatewayv1.GroupName), kindHTTPRoute
+-	case gatewayv1.HTTPProtocolType:
+-		return GroupPtr(gatewayv1.GroupName), kindHTTPRoute
++		return []gatewayv1.RouteGroupKind{
++			{
++				Group: GroupPtr(gatewayv1alpha2.GroupName),
++				Kind:  kindTLSRoute,
++			},
++		}
+ 	case gatewayv1.TCPProtocolType:
+-		return GroupPtr(gatewayv1alpha2.GroupName), kindTCPRoute
++		return []gatewayv1.RouteGroupKind{
++			{
++				Group: GroupPtr(gatewayv1alpha2.GroupName),
++				Kind:  kindTCPRoute,
++			},
++		}
+ 	case gatewayv1.UDPProtocolType:
+-		return GroupPtr(gatewayv1alpha2.GroupName), kindUDPRoute
++		return []gatewayv1.RouteGroupKind{
++			{
++				Group: GroupPtr(gatewayv1alpha2.GroupName),
++				Kind:  kindUDPRoute,
++			},
++		}
+ 	default:
+-		return GroupPtr("Unknown"), "Unknown"
++		return []gatewayv1.RouteGroupKind{}
+ 	}
+ }
++
+ func getGatewayKindForObject(obj metav1.Object) gatewayv1.Kind {
+ 	switch obj.(type) {
+ 	case *gatewayv1.HTTPRoute:
+
+commit 8c8c7268982fb0d52422b117f3595250ee2f3f77
+Author: Vlad Korkach <v.korkach@playson.com>
+Date:   Wed Apr 23 17:50:57 2025 +0200
+
+    gateway-api: support GRPCRoute alongside HTTPRoute by default
+    
+    By default, for HTTP and HTTPS protocols we consider both HTTPRoute and GRPCRoute as supported.
+    If AllowedRoutes.Kinds is explicitly defined, we filter the supported kinds down to those intersecting with what's explicitly allowed.
+    This aligns with the Gateway API spec and ensures conformance tests like GatewayWithAttachedRoutesWithPort8080 pass correctly.
+    
+    Fixes: #39021
+    
+    Signed-off-by: Archonr <archonr94@gmail.cim>
+    Signed-off-by: Vlad Korkach <v.korkach@playson.com>
+
+diff --git a/operator/pkg/gateway-api/gateway_reconcile.go b/operator/pkg/gateway-api/gateway_reconcile.go
+index 9473517b46..ae6a5c8869 100644
+--- a/operator/pkg/gateway-api/gateway_reconcile.go
++++ b/operator/pkg/gateway-api/gateway_reconcile.go
+@@ -305,7 +305,6 @@ func (r *gatewayReconciler) filterGRPCRoutesByListener(ctx context.Context, gw *
+ 	return filtered
+ }
+ 
+-
+ // getGatewayClassConfig returns the CiliumGatewayClassConfig referenced by the GatewayClass.
+ // If the GatewayClass does not reference a CiliumGatewayClassConfig, it returns nil.
+ func (r *gatewayReconciler) getGatewayClassConfig(ctx context.Context, gwc *gatewayv1.GatewayClass) *v2alpha1.CiliumGatewayClassConfig {
+@@ -472,25 +471,27 @@ func (r *gatewayReconciler) setListenerStatus(ctx context.Context, gw *gatewayv1
+ 
+ 	for _, l := range gw.Spec.Listeners {
+ 		isValid := true
+-		supportedKinds := getSupportedRouteKinds(l.Protocol)
+ 
+-		if l.AllowedRoutes != nil && len(l.AllowedRoutes.Kinds) != 0 {
++		// SupportedKinds is a required field, so we can't declare it as nil.
++		supportedKinds := []gatewayv1.RouteGroupKind{}
++
++		if l.AllowedRoutes != nil && len(l.AllowedRoutes.Kinds) > 0 {
+ 			allowedKindsMap := make(map[gatewayv1.RouteGroupKind]struct{})
+ 			for _, k := range l.AllowedRoutes.Kinds {
+ 				allowedKindsMap[k] = struct{}{}
+ 			}
+ 
+-			filteredSupportedKinds := []gatewayv1.RouteGroupKind{}
+-			for _, sk := range supportedKinds {
+-				if _, ok := allowedKindsMap[sk]; ok {
+-					filteredSupportedKinds = append(filteredSupportedKinds, sk)
++			for _, kind := range getSupportedRouteKinds(l.Protocol) {
++				if _, ok := allowedKindsMap[kind]; ok {
++					supportedKinds = append(supportedKinds, kind)
+ 				}
+ 			}
+ 
+-			if len(filteredSupportedKinds) == 0 {
++			if len(supportedKinds) == 0 {
+ 				isValid = false
+ 			}
+-			supportedKinds = filteredSupportedKinds
++		} else {
++			supportedKinds = getSupportedRouteKinds(l.Protocol)
+ 		}
+ 
+ 		var conds []metav1.Condition
+@@ -588,7 +589,6 @@ func (r *gatewayReconciler) setListenerStatus(ctx context.Context, gw *gatewayv1
+ 	return nil
+ }
+ 
+-
+ func validateTLSSecret(ctx context.Context, c client.Client, namespace, name string) error {
+ 	secret := &corev1.Secret{}
+ 	if err := c.Get(ctx, client.ObjectKey{
+diff --git a/operator/pkg/gateway-api/helpers.go b/operator/pkg/gateway-api/helpers.go
+index 232a45cabd..e0cfadb19c 100644
+--- a/operator/pkg/gateway-api/helpers.go
++++ b/operator/pkg/gateway-api/helpers.go
+@@ -48,13 +48,6 @@ func ObjectNamePtr(name string) *gatewayv1.ObjectName {
+ 	return &objectName
+ }
+ 
+-func groupDerefOr(group *gatewayv1.Group, defaultGroup string) string {
+-	if group != nil && *group != "" {
+-		return string(*group)
+-	}
+-	return defaultGroup
+-}
+-
+ // isAllowed returns true if the provided Route is allowed to attach to given gateway
+ func isAllowed(ctx context.Context, c client.Client, gw *gatewayv1.Gateway, route metav1.Object, logger *slog.Logger) bool {
+ 	for _, listener := range gw.Spec.Listeners {
+@@ -172,7 +165,7 @@ func getSupportedRouteKinds(protocol gatewayv1.ProtocolType) []gatewayv1.RouteGr
+ 			},
+ 		}
+ 	default:
+-		return []gatewayv1.RouteGroupKind{}
++		return nil
+ 	}
+ }
+ 
+
+commit 13418f02363efdc0431010f83134a3d7beb66086
+Author: Vlad Korkach <v.korkach@playson.com>
+Date:   Thu Apr 24 11:30:09 2025 +0200
+
+    gateway-api: align SupportedKinds handling with Gateway API spec
+    
+    This patch refactors the logic for setting SupportedKinds on listeners
+    to better align with the Gateway API spec.
+    
+    - For HTTP/HTTPS protocols, both HTTPRoute and GRPCRoute are returned by default.
+    - If AllowedRoutes.Kinds is set, only the intersection with supported kinds is allowed.
+    - Added strict validation to mark listeners invalid if explicitly allowed kinds are unsupported.
+    - Fixed group dereferencing and comparison issues between *Group and string.
+    - Ensures conformance test `GatewayWithAttachedRoutesWithPort8080` passes by always including HTTPRoute in supported kinds.
+    
+    This improves conformance and prevents unexpected behavior when GRPCRoute is not installed.
+    
+    Fixes: #39021
+    
+    Signed-off-by: Archonr <archonr94@gmail.com>
+    Signed-off-by: Vlad Korkach <v.korkach@playson.com>
+
+diff --git a/operator/pkg/gateway-api/gateway_reconcile.go b/operator/pkg/gateway-api/gateway_reconcile.go
+index ae6a5c8869..e406a4abe0 100644
+--- a/operator/pkg/gateway-api/gateway_reconcile.go
++++ b/operator/pkg/gateway-api/gateway_reconcile.go
+@@ -470,28 +470,32 @@ func (r *gatewayReconciler) setListenerStatus(ctx context.Context, gw *gatewayv1
+ 	}
+ 
+ 	for _, l := range gw.Spec.Listeners {
+-		isValid := true
+-
+-		// SupportedKinds is a required field, so we can't declare it as nil.
++		allSupported := getSupportedRouteKinds(l.Protocol)
+ 		supportedKinds := []gatewayv1.RouteGroupKind{}
++		isValid := true
+ 
+ 		if l.AllowedRoutes != nil && len(l.AllowedRoutes.Kinds) > 0 {
+-			allowedKindsMap := make(map[gatewayv1.RouteGroupKind]struct{})
+-			for _, k := range l.AllowedRoutes.Kinds {
+-				allowedKindsMap[k] = struct{}{}
+-			}
+-
+-			for _, kind := range getSupportedRouteKinds(l.Protocol) {
+-				if _, ok := allowedKindsMap[kind]; ok {
+-					supportedKinds = append(supportedKinds, kind)
++			intersection := []gatewayv1.RouteGroupKind{}
++			for _, supported := range allSupported {
++				for _, allowed := range l.AllowedRoutes.Kinds {
++					if supported.Kind == allowed.Kind &&
++						groupDerefOr(allowed.Group, gatewayv1.GroupName) == string(*supported.Group) {
++						intersection = append(intersection, supported)
++						break
++					}
+ 				}
+ 			}
++			supportedKinds = intersection
+ 
+-			if len(supportedKinds) == 0 {
++			// Mark invalid if not all explicitly allowed kinds are actually supported
++			if len(supportedKinds) != len(l.AllowedRoutes.Kinds) {
+ 				isValid = false
+ 			}
+ 		} else {
+-			supportedKinds = getSupportedRouteKinds(l.Protocol)
++			supportedKinds = allSupported
++			if len(supportedKinds) == 0 {
++				isValid = false
++			}
+ 		}
+ 
+ 		var conds []metav1.Condition
+diff --git a/operator/pkg/gateway-api/helpers.go b/operator/pkg/gateway-api/helpers.go
+index e0cfadb19c..c5261bebe0 100644
+--- a/operator/pkg/gateway-api/helpers.go
++++ b/operator/pkg/gateway-api/helpers.go
+@@ -48,6 +48,13 @@ func ObjectNamePtr(name string) *gatewayv1.ObjectName {
+ 	return &objectName
+ }
+ 
++func groupDerefOr(group *gatewayv1.Group, defaultGroup string) string {
++	if group != nil && *group != "" {
++		return string(*group)
++	}
++	return defaultGroup
++}
++
+ // isAllowed returns true if the provided Route is allowed to attach to given gateway
+ func isAllowed(ctx context.Context, c client.Client, gw *gatewayv1.Gateway, route metav1.Object, logger *slog.Logger) bool {
+ 	for _, listener := range gw.Spec.Listeners {
+
+commit 605a3ec8aeb3cb8d6fec81786854896cf1e872fb
+Author: Vlad Korkach <v.korkach@playson.com>
+Date:   Mon May 12 22:50:43 2025 +0200
+
+    gateway-api: fix missing ObservedGeneration in listener conditions
+    
+    Fixes conformance failure where Gateway listener conditions do not include
+    ObservedGeneration, causing stale condition errors during test validation.
+    
+    This aligns with expectations from conformance test helper:
+    https://github.com/kubernetes-sigs/gateway-api/blob/main/conformance/utils/kubernetes/helpers.go#L115
+    
+    Fixes: #39021
+    
+    Signed-off-by: Archonr <archonr94@gmail.com>
+    Signed-off-by: Vlad Korkach <v.korkach@playson.com>
+
+diff --git a/operator/pkg/gateway-api/gateway_reconcile.go b/operator/pkg/gateway-api/gateway_reconcile.go
+index e406a4abe0..11a556e55b 100644
+--- a/operator/pkg/gateway-api/gateway_reconcile.go
++++ b/operator/pkg/gateway-api/gateway_reconcile.go
+@@ -471,7 +471,7 @@ func (r *gatewayReconciler) setListenerStatus(ctx context.Context, gw *gatewayv1
+ 
+ 	for _, l := range gw.Spec.Listeners {
+ 		allSupported := getSupportedRouteKinds(l.Protocol)
+-		supportedKinds := []gatewayv1.RouteGroupKind{}
++		var supportedKinds []gatewayv1.RouteGroupKind
+ 		isValid := true
+ 
+ 		if l.AllowedRoutes != nil && len(l.AllowedRoutes.Kinds) > 0 {
+@@ -551,6 +551,7 @@ func (r *gatewayReconciler) setListenerStatus(ctx context.Context, gw *gatewayv1
+ 					Status:             metav1.ConditionTrue,
+ 					Reason:             string(gatewayv1.ListenerReasonResolvedRefs),
+ 					Message:            "Resolved Refs",
++					ObservedGeneration: gw.GetGeneration(),
+ 					LastTransitionTime: metav1.Now(),
+ 				})
+ 		}
+
+commit 92e428c9f976c201a2830a79504f169d58ed528c
+Author: Vlad Korkach <v.korkach@playson.com>
+Date:   Wed Jul 2 16:43:34 2025 +0200
+
+    gateway-api: fix incorrect condition reason for ListenerConditionAccepted
+    
+    This aligns with expectations from conformance test helper:
+    https://github.com/kubernetes-sigs/gateway-api/blob/main/apis/v1/gateway_types.go#L1322
+    
+    Fixes: #39021
+    
+    Signed-off-by: Archonr <archonr94@gmail.com>
+    Signed-off-by: Vlad Korkach <v.korkach@playson.com>
+
+diff --git a/operator/pkg/gateway-api/gateway_status.go b/operator/pkg/gateway-api/gateway_status.go
+index 888f07f6cc..71cf4f357e 100644
+--- a/operator/pkg/gateway-api/gateway_status.go
++++ b/operator/pkg/gateway-api/gateway_status.go
+@@ -101,7 +101,7 @@ func gatewayListenerProgrammedCondition(gw *gatewayv1.Gateway, ready bool, msg s
+ 			Status:             metav1.ConditionTrue,
+ 			ObservedGeneration: gw.GetGeneration(),
+ 			LastTransitionTime: metav1.NewTime(time.Now()),
+-			Reason:             string(gatewayv1.ListenerConditionProgrammed),
++			Reason:             string(gatewayv1.ListenerReasonProgrammed),
+ 			Message:            msg,
+ 		}
+ 	default:
+@@ -124,7 +124,7 @@ func gatewayListenerAcceptedCondition(gw *gatewayv1.Gateway, ready bool, msg str
+ 			Status:             metav1.ConditionTrue,
+ 			ObservedGeneration: gw.GetGeneration(),
+ 			LastTransitionTime: metav1.NewTime(time.Now()),
+-			Reason:             string(gatewayv1.ListenerConditionAccepted),
++			Reason:             string(gatewayv1.ListenerReasonAccepted),
+ 			Message:            msg,
+ 		}
+ 	default:

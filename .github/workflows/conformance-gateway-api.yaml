@@ -23,6 +23,7 @@ on:
       - main
       - ft/main/**
       - 'renovate/main-**'
+      - 'fix-gatewayapi-grpcroute-attachment-conformance'
     paths-ignore:
       - 'Documentation/**'
       - 'test/**'
